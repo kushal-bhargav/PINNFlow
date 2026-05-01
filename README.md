@@ -1,6 +1,6 @@
 # PINNFlow
 
-**PINNFlow** is an end-to-end AI-driven pipeline design and optimization framework that automatically translates high-level industrial requirements into optimal, physics-compliant physical geometries. It leverages a Conditional Auto-Variational Encoder (CA-VAE) and a Graph Neural Network (GNN) to rapidly generate intelligent initial design proposals based on complex network topologies. These designs are then optimized by a Reinforcement Learning agent against real-time stresses from a PINN surrogate and strict regulatory codes (ASME, API) to ensure complete industrial compliance.
+**PINNFlow** is an end-to-end AI-driven pipeline design and optimization framework that automatically translates high-level industrial requirements into optimal, physics-compliant physical geometries. It leverages a Conditional Auto-Variational Encoder (CA-VAE) to rapidly generate intelligent initial design proposals based on complex network topologies. These designs are then optimized by a Reinforcement Learning agent against real-time stresses from a PINN surrogate and strict regulatory codes (ASME, API) to ensure complete industrial compliance.
 
 ## Project Structure
 
