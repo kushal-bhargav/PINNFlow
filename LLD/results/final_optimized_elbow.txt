@@ -1,0 +1,17 @@
+! ===========================================================
+! PINNFlow v8 — Industrial Assembly Verification
+! Geometry Type: Elbow
+! ===========================================================
+/PREP7
+/CLEAR,NOSTART
+/PREP7
+MP,EX,1,200000; MP,NUXY,1,0.3
+ET,1,SOLID185
+TORUS, 286.15401037663514, 176.3250520554459, 161.18155205661867, 0, 90
+MSHAPE,0,3D; MSHKEY,1; ESIZE, 20; VMESH,ALL
+DA, ALL, ALL, 0
+FINISH
+/SOLU
+SOLVE
+FINISH
+! ===========================================================

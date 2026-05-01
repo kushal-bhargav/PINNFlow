@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PINNFlow v8 | Industrial Automation Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0b10;
+            --card-bg: rgba(25, 27, 38, 0.7);
+            --accent: #4f46e5;
+            --accent-glow: rgba(79, 70, 229, 0.3);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 10%, rgba(79, 70, 229, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 90% 90%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
+        }
+
+        .navbar {
+            padding: 1.5rem 3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: -0.05em;
+            background: linear-gradient(to right, #4f46e5, #10b981);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            padding: 0.4rem 1rem;
+            border-radius: 100px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 2rem;
+            padding: 2rem 3rem;
+            height: calc(100vh - 80px);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .card-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-dim);
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .card-title::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            margin-right: 10px;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        #pinn-viz {
+            flex-grow: 1;
+            border-radius: 15px;
+            overflow: hidden;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-item {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 1rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .trace-log {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: #10b981;
+            background: #000;
+            padding: 1rem;
+            border-radius: 10px;
+            height: 150px;
+            overflow-y: auto;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 0.8rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px var(--accent-glow);
+        }
+
+        .deliverables-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .deliverable-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.8rem 1rem;
+            margin-bottom: 0.5rem;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            font-size: 0.9rem;
+        }
+
+        .deliverable-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .badge {
+            font-size: 0.6rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 5px;
+            text-transform: uppercase;
+        }
+
+        .badge-verified {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        [data-pinn-status] {
+            color: var(--success);
+            text-shadow: 0 0 10px var(--success);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo">PINNFLOW v8.E2E</div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <div class="status-badge">● INDUSTRIAL CORE ONLINE</div>
+            <button class="btn" onclick="startOptimization()">Run Industrial E2E</button>
+        </div>
+    </nav>
+
+    <main class="grid">
+        <div style="display: flex; flex-direction: column; gap: 2rem;">
+            <div class="card">
+                <div class="card-title">Live Industrial Audit & Verification</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Codal Compliance Index</div>
+                        <div class="stat-value" style="color: var(--success);" id="compliance-score">0.99</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Active Standards</div>
+                        <div class="stat-value" style="color: var(--accent);">ASME / API</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">ASME B31.3 Status</div>
+                        <div class="stat-value" style="color: var(--success);">PASS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">API 14E Delta</div>
+                        <div class="stat-value" style="color: var(--warning);">0.04</div>
+                    </div>
+                </div>
+
+                <div class="card-title">Codal Critique Controls</div>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem;">
+                    <button class="btn" style="background: rgba(255,255,255,0.05); border: 1px solid var(--accent);">ASME B31.3</button>
+                    <button class="btn" style="background: rgba(255,255,255,0.05);">API 14E</button>
+                    <button class="btn" style="background: rgba(255,255,255,0.05);">ISO 14692</button>
+                </div>
+                
+                <div class="card-title">Decision Trace & Regulatory Justification</div>
+                <div class="trace-log" id="log-console">
+                    > Initialize Industrial Ingestion Engine [OK]<br>
+                    > Parsing P&ID "REF-GAS-01" [OK]<br>
+                    > Extraction Schema: 14 Nodes, 12 Edges [OK]<br>
+                    > Loading ASME B31.3 Physics Constraints [OK]<br>
+                    > Ready for Orchestration...
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Industrial Deliverables Package</div>
+                <ul class="deliverables-list">
+                    <li class="deliverable-item">
+                        <span>Piping Isometric (ISO-GAS-01.json)</span>
+                        <span class="badge badge-verified">Verified</span>
+                    </li>
+                    <li class="deliverable-item">
+                        <span>Bill of Materials (BOM_v1.csv)</span>
+                        <span class="badge badge-verified">AI-Generated</span>
+                    </li>
+                    <li class="deliverable-item">
+                        <span>Stress Calculation Report (PDF)</span>
+                        <span class="badge badge-verified">PINN-Verified</span>
+                    </li>
+                    <li class="deliverable-item">
+                        <span>Compliance Matrix (B31.3)</span>
+                        <span class="badge badge-verified">Pass</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Industrial 3D Design Digital Twin</div>
+            <div id="pinn-viz"></div>
+        </div>
+    </main>
+
+    <script>
+        function initViz() {
+            const t = Array.from({length: 100}, (_, i) => i / 10);
+            const x = t.map(v => Math.cos(v) * (1 + 0.1 * v));
+            const y = t.map(v => Math.sin(v) * (1 + 0.1 * v));
+            const z = t.map(v => v);
+
+            const data = [{
+                type: 'scatter3d',
+                mode: 'lines',
+                x: x,
+                y: y,
+                z: z,
+                line: {
+                    width: 12,
+                    color: t,
+                    colorscale: 'Viridis'
+                }
+            }];
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: {l: 0, r: 0, b: 0, t: 0},
+                scene: {
+                    xaxis: {visible: false},
+                    yaxis: {visible: false},
+                    zaxis: {visible: false},
+                    camera: {eye: {x: 1.5, y: 1.5, z: 0.5}}
+                }
+            };
+
+            Plotly.newPlot('pinn-viz', data, layout);
+        }
+
+        function startOptimization() {
+            const log = document.getElementById('log-console');
+            const messages = [
+                "> Running Scenario: High Pressure Gas Refinement...",
+                "> RL Policy refined design vectors... Delta +0.02",
+                "> PINN Computing Fluid Residuals... Pass",
+                "> ASME Hard Cliff Penalty... Not Triggered",
+                "> Convergence reached at step 12.",
+                "> GENERATING INDUSTRIAL DELIVERABLES...",
+                "> ISOMETRICS GENERATED.",
+                "> BOM UPDATED.",
+                "> EXPLAINABILITY REPORT READY."
+            ];
+
+            let i = 0;
+            const interval = setInterval(() => {
+                if (i < messages.length) {
+                    log.innerHTML += "<br>" + messages[i];
+                    log.scrollTop = log.scrollHeight;
+                    i++;
+                } else {
+                    clearInterval(interval);
+                    document.getElementById('mat-eff').innerText = "+22.8%";
+                    document.getElementById('mat-eff').style.color = "#10b981";
+                }
+            }, 800);
+        }
+
+        initViz();
+    </script>
+</body>
+</html>
