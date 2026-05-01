@@ -34,6 +34,17 @@ All scripts are intended to be executed from the **project root**, but reference
    ```bash
    python -m pytest LLD/tests/
    ```
+## 🚀 Full Pipeline & Execution
+
+The complete implementation, execution flow, and deep technical details are located in:
+
+👉 **[LLD/README.md](LLD/README.md)**
+
+This includes:
+- End-to-end pipeline execution
+- Model architecture (CA-VAE + GNN + PINN + RL)
+- Training & optimization workflow
+- Testing and validation setup
 
 ## Deep Dive & Methodology
 
