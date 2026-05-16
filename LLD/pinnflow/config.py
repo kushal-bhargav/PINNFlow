@@ -63,3 +63,22 @@ V1_METRICS = {
     "ppo_impr":         11.95,
     "e2e_csr":          0.75,
 }
+
+ELBOW_CONFIG = {
+    "moe_experts": 4,
+    "elbow_expert_width": 256,
+    "elbow_expert_depth": 3,
+    "use_refinement": True,
+    "refinement_alpha": 0.8,
+    "fourier_n_base": 64,
+    "fourier_n_curve": 32,
+    "loss_balancer": "gradnorm",
+    "curriculum_stages": [200, 150, 200, 150],
+    "uq_method": "ensemble",
+    "n_ensemble": 3,
+    "mc_dropout_p": 0.1,
+    "mc_samples": 50,
+    "elbow_sample_ratio": 0.40,
+    "grad_norm_alpha": 0.12,
+    "uncertainty_penalty_weight": 0.5,
+}

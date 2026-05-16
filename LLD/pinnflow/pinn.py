@@ -67,6 +67,7 @@ class MultiTaskPINN:
         self.lam_s = lam_s; self.lam_f = lam_f
         self.mu_bc = mu_bc; self.nu_mono = nu_mono
         self.lr    = lr
+        self.n_in  = n_in
         
         # Ablation Toggles
         self.use_multitask = use_multitask
@@ -75,7 +76,7 @@ class MultiTaskPINN:
         self.use_monotonicity = use_monotonicity
         
         # [P7.1] Fourier Encoding
-        self.fourier = FourierFeatureLayer(n_in=10, n_features=64, sigma=1.0)
+        self.fourier = FourierFeatureLayer(n_in=n_in, n_features=64, sigma=1.0)
 
         # Shared encoder (increased input size to 128)
         e = [self.fourier.output_dim, hidden[0], hidden[1]]
@@ -194,8 +195,10 @@ class MultiTaskPINN:
             "shape_id": [0, 2],
             "shape_param": [0.3, 1.5]
         }
-        X = np.zeros((n, 10))
+        X = np.zeros((n, self.n_in))
         for i, (name, b) in enumerate(bounds.items()):
+            if i >= self.n_in:
+                break
             if "id" in name:
                 X[:, i] = np.random.randint(b[0], b[1] + 1, n)
             else:
@@ -209,8 +212,8 @@ class MultiTaskPINN:
         L = np.maximum(X[:, 2], 1.0)
         P = np.maximum(X[:, 3], 0.1)
         v = np.maximum(X[:, 6], 0.1)
-        shape_id = np.clip(np.rint(X[:, 8]), 0, 2).astype(int)
-        shape_param = np.clip(X[:, 9], 0.3, 1.5)
+        shape_id = np.clip(np.rint(X[:, 8]), 0, 2).astype(int) if X.shape[1] > 8 else np.zeros(len(X), dtype=int)
+        shape_param = np.clip(X[:, 9], 0.3, 1.5) if X.shape[1] > 9 else np.ones(len(X))
 
         sigma = (P * d) / (2.0 * t)
         sigma *= np.where(shape_id == 1, 1.15, 1.0)

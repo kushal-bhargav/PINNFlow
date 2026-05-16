@@ -32,18 +32,23 @@ class ClosedLoopOptim:
     def _seed_environment(self, state: np.ndarray) -> None:
         if hasattr(self.env, "set_state"):
             self.env.set_state(state)
+            if len(np.asarray(state).reshape(-1)) < len(getattr(self.env, "state", state)):
+                self.env.state = np.asarray(state, dtype=float).copy()
         elif hasattr(self.env, "env") and hasattr(self.env.env, "set_state"):
             self.env.env.set_state(state)
         else:
             self.env.state = state.copy()
 
     def _normalized_state_delta(self, prev_state: np.ndarray, next_state: np.ndarray) -> float:
+        prev = np.asarray(prev_state, dtype=float).reshape(-1)
+        nxt = np.asarray(next_state, dtype=float).reshape(-1)
+        n = min(len(prev), len(nxt))
         bounds = getattr(self.env, "BOUNDS", None)
         if bounds is None:
-            scale = np.ones_like(prev_state)
+            scale = np.ones(n)
         else:
-            scale = np.maximum(bounds[:, 1] - bounds[:, 0], 1e-6)
-        delta = (next_state - prev_state) / scale
+            scale = np.maximum(bounds[:n, 1] - bounds[:n, 0], 1e-6)
+        delta = (nxt[:n] - prev[:n]) / scale
         return float(np.linalg.norm(delta) / np.sqrt(len(delta)))
 
     def _apply_codal_guidance(self, state: np.ndarray, info: Dict[str, Any]) -> np.ndarray:
@@ -73,7 +78,8 @@ class ClosedLoopOptim:
             updated = current + (target - current) * step_fraction
             guided[idx] = updated
 
-        guided = np.clip(guided, bounds[:, 0], bounds[:, 1])
+        n = min(len(guided), len(bounds))
+        guided[:n] = np.clip(guided[:n], bounds[:n, 0], bounds[:n, 1])
         guided[8] = float(np.clip(np.rint(guided[8]), bounds[8, 0], bounds[8, 1]))
         guided[9] = float(np.clip(guided[9], bounds[9, 0], bounds[9, 1]))
         return guided
@@ -143,7 +149,7 @@ class ClosedLoopOptim:
                 }
             )
 
-            state = next_state
+            state = next_state[: len(state)] if len(next_state) != len(state) else next_state
             if info.get("codal_recommendations"):
                 state = self._apply_codal_guidance(state, info)
                 self._seed_environment(state)

@@ -10,6 +10,7 @@ pressure drop share the same design vector.
 import numpy as np
 import pandas as pd
 from pinnflow.activations import sigmoid
+from pinnflow.geometry.features import extract_curvature_features
 
 
 class PhysicsSimulator:
@@ -141,3 +142,56 @@ class PhysicsSimulator:
         if k is None:
             k = np.random.uniform(0.3, 0.8)
         return self._fem_cfd(d, t, L, P, u, dT, k, velocity=velocity)
+
+    def generate_elbow_batch(self, n: int = 1600) -> pd.DataFrame:
+        """Generate elbow-focused samples with varying bend radius and angle."""
+        rows = []
+        angles = np.array([30.0, 45.0, 60.0, 90.0])
+        for _ in range(n):
+            d = float(np.random.choice(self.DIAMETERS))
+            t_over_d = np.random.uniform(0.02, 0.08)
+            t = max(d * t_over_d, 4.0)
+            r_over_d = float(np.random.uniform(1.0, 5.0))
+            angle = float(np.random.choice(angles))
+            v = float(np.random.uniform(0.5, 12.0))
+            L = max((np.deg2rad(angle) * r_over_d * d / 1000.0), 1.0)
+            base = self._fem_cfd(
+                d,
+                t,
+                L,
+                np.random.uniform(1.5, 20.0),
+                np.random.uniform(0.0, 150.0),
+                np.random.uniform(-40.0, 80.0),
+                np.random.uniform(0.3, 0.8),
+                augmented=True,
+                velocity=v,
+            )
+            X = np.array(
+                [[base["diameter"], base["thickness"], base["length"], base["pressure"],
+                  base["soil_disp"], base["delta_T"], base["velocity"], base["soil_stiffness"],
+                  1.0, r_over_d]],
+                dtype=float,
+            )
+            curve = extract_curvature_features(X)[0]
+            dean_factor = 1.0 + 0.033 * np.log10(max(curve[-1], 1.0)) ** 2
+            scf = 0.9 / max(t_over_d, 1e-4) ** (2.0 / 3.0) * r_over_d ** (1.0 / 3.0)
+            turbulence = np.random.lognormal(mean=np.log(0.06), sigma=0.35)
+            mesh_factor = np.random.lognormal(mean=0.0, sigma=0.2)
+            stress_multiplier = np.clip(0.35 * scf * dean_factor, 1.05, 4.0)
+            base["von_mises_stress"] = round(max(base["von_mises_stress"] * stress_multiplier, 5.0), 3)
+            base["pressure_drop_kPa"] = round(max(base["pressure_drop_kPa"] * (1.0 + 0.25 / r_over_d + turbulence), 0.1), 4)
+            base.update({
+                "shape_id": 1.0,
+                "shape_param": r_over_d,
+                "elbow_angle_deg": angle,
+                "turbulence_intensity": round(float(turbulence), 5),
+                "mesh_resolution_factor": round(float(mesh_factor), 4),
+                "bend_radius": curve[0],
+                "curvature_ratio": curve[1],
+                "sin_elbow_angle": curve[2],
+                "cos_elbow_angle": curve[3],
+                "thickness_ratio": curve[4],
+                "dean_number": curve[5],
+            })
+            rows.append(base)
+        return pd.DataFrame(rows)

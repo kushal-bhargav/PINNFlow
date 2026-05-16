@@ -27,11 +27,18 @@ from pinnflow.vae        import CAVAE
 from pinnflow.environment import PipelineEnv
 from pinnflow.agent      import PPOAgent
 from pinnflow.baselines  import SimpleNN
+from pinnflow.models.moe_pinn import MoEPINN
 
 FEAT = [
     "diameter", "thickness", "length", "pressure",
     "soil_disp", "delta_T", "velocity", "soil_stiffness",
 ]
+
+ELBOW_ABLATION_CONFIGS = {
+    "F: MoE-PINN": {"use_moe": True, "use_refinement": False, "use_gnn": False, "use_uq": False},
+    "G: MoE-PINN+Refine": {"use_moe": True, "use_refinement": True, "use_gnn": False, "use_uq": False},
+    "H: Full redesign": {"use_moe": True, "use_refinement": True, "use_gnn": True, "use_uq": True},
+}
 
 
 def run_ablation(

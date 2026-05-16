@@ -2,14 +2,14 @@
   {
     "step": 0,
     "action": "Scenario",
-    "result": "{'max_p': 35.2, 'max_t': 8.59, 'topology': 'Synthetic-FSI'}",
+    "result": "{'max_p': 20.24, 'max_t': 9.05, 'topology': 'Synthetic-FSI'}",
     "reason": "Scenario initialized",
     "metadata": {}
   },
   {
     "step": 1,
     "action": "Ingestion",
-    "result": "{'max_pressure_bar': 35.2, 'max_temp_c': 8.59, 'code': 'ASME B31.3', 'topology': 'Synthetic-FSI'}",
+    "result": "{'max_pressure_bar': 20.24, 'max_temp_c': 9.05, 'code': 'ASME B31.3', 'topology': 'Synthetic-FSI'}",
     "reason": "Scenario constraints parsed",
     "metadata": {}
   },
@@ -19,32 +19,32 @@
     "result": "Synthetic-FSI",
     "reason": "Scenario topology loaded",
     "metadata": {
-      "mean_pressure": 0.44522562623023987,
-      "mean_flow": 0.1348157376050949
+      "mean_pressure": 0.0010818250011652708,
+      "mean_flow": 0.03493083268404007
     }
   },
   {
     "step": 3,
     "action": "CandidateSelection",
-    "result": "[273.0, 9.27, 120.0, 3.52, 15.0, -11.41, 2.38, 0.55, 2.0, 1.2]",
+    "result": "[273.0, 9.27, 120.0, 2.024, 15.0, -10.95, 2.006, 0.55, 2.0, 1.2, 327.6, 0.417, 1.0, 0.0, 0.034, 353498.809]",
     "reason": "Selected highest-ranked candidate after heuristics and topology scoring",
     "metadata": {
-      "score": 0.814803191259721,
+      "score": 0.8852639143396455,
       "variants": [
         {
           "name": "Max Accessibility",
           "heuristic": "Maintenance",
-          "score": 0.798
+          "score": 0.754
         },
         {
           "name": "Low Vibration",
           "heuristic": "Safety",
-          "score": 0.76
+          "score": 0.72
         },
         {
           "name": "Shortest Path",
           "heuristic": "Cost",
-          "score": 0.713
+          "score": 0.703
         }
       ]
     }
@@ -52,7 +52,7 @@
   {
     "step": 4,
     "action": "ClosedLoop",
-    "result": "[263.505, 8.971, 124.167, 3.254, 22.643, -8.556, 2.23, 0.55, 2.0, 1.184]",
+    "result": "[311.505, 8.493, 109.5, 1.0, 12.069, -12.085, 2.168, 0.549, 2.0, 1.121, 327.6, 0.417, 1.0, 0.0, 0.034, 353498.809]",
     "reason": "state_stabilized",
     "metadata": {
       "iterations": 3,

@@ -2,14 +2,14 @@
   {
     "step": 0,
     "action": "Scenario",
-    "result": "{'max_p': 50.13, 'max_t': 378.05, 'topology': 'GasLib-4197'}",
+    "result": "{'max_p': 56.29, 'max_t': 316.99, 'topology': 'GasLib-4197'}",
     "reason": "Scenario initialized",
     "metadata": {}
   },
   {
     "step": 1,
     "action": "Ingestion",
-    "result": "{'max_pressure_bar': 50.13, 'max_temp_c': 378.05, 'code': 'ASME B31.3', 'topology': 'GasLib-4197'}",
+    "result": "{'max_pressure_bar': 56.29, 'max_temp_c': 316.99, 'code': 'ASME B31.3', 'topology': 'GasLib-4197'}",
     "reason": "Scenario constraints parsed",
     "metadata": {}
   },
@@ -19,32 +19,32 @@
     "result": "GasLib-4197",
     "reason": "Scenario topology loaded",
     "metadata": {
-      "mean_pressure": -0.08156589418649673,
-      "mean_flow": 0.15977855026721954
+      "mean_pressure": -0.06134812906384468,
+      "mean_flow": -0.06682352721691132
     }
   },
   {
     "step": 3,
     "action": "CandidateSelection",
-    "result": "[273.0, 9.27, 80.0, 5.013, 15.0, 80.0, 2.753, 0.45, 1.0, 0.9]",
+    "result": "[273.0, 9.27, 80.0, 5.629, 15.0, 80.0, 2.907, 0.45, 1.0, 1.5, 819.0, 0.167, 0.707, 0.707, 0.034, 324018.197]",
     "reason": "Selected highest-ranked candidate after heuristics and topology scoring",
     "metadata": {
-      "score": 0.8241824059712259,
+      "score": 0.8219949866363514,
       "variants": [
         {
           "name": "Max Accessibility",
           "heuristic": "Maintenance",
-          "score": 0.751
-        },
-        {
-          "name": "Shortest Path",
-          "heuristic": "Cost",
-          "score": 0.716
+          "score": 0.748
         },
         {
           "name": "Low Vibration",
           "heuristic": "Safety",
-          "score": 0.713
+          "score": 0.714
+        },
+        {
+          "name": "Shortest Path",
+          "heuristic": "Cost",
+          "score": 0.693
         }
       ]
     }
@@ -52,7 +52,7 @@
   {
     "step": 4,
     "action": "ClosedLoop",
-    "result": "[269.885, 9.209, 72.614, 4.251, 14.81, 75.146, 2.937, 0.431, 1.0, 0.914]",
+    "result": "[301.161, 8.951, 73.737, 4.158, 19.174, 75.516, 2.68, 0.447, 1.0, 1.331, 819.0, 0.167, 0.707, 0.707, 0.034, 324018.197]",
     "reason": "state_stabilized",
     "metadata": {
       "iterations": 3,

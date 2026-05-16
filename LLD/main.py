@@ -8,12 +8,89 @@ import sys
 from pathlib import Path
 import warnings
 
+import numpy as np
+import pandas as pd
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pinnflow.orchestrator_v2 import UnifiedOrchestrator
 
 warnings.filterwarnings("ignore")
+
+
+def _write_topology_pipeline_metrics(orchestrator: UnifiedOrchestrator, results: dict) -> Path:
+    """
+    Export topology-grouped MAE/reliability from the actual pipeline run.
+
+    The latest E2E suite produces optimized final states, but did not previously
+    persist topology MAE values. This benchmark compares the final surrogate
+    prediction with the simulator response for each completed scenario, then
+    aggregates authentic GasLib cases separately from synthetic fallback cases.
+    """
+    rows = []
+    for idx, (case_name, result) in enumerate(results.items()):
+        state = np.asarray(result["optimized_state"], dtype=float).reshape(1, -1)
+        topology = str(result["scenario"]["inputs"].get("topology", "unknown"))
+        topology_group = "Synthetic" if "synthetic" in topology.lower() else "Authentic"
+
+        pred = orchestrator.pinn.predict(state)[0]
+        s = state.reshape(-1)
+
+        # Seed simulator noise per scenario so the exported benchmark is stable.
+        np.random.seed(10_000 + idx)
+        truth = orchestrator.physics.generate_one(
+            d=float(s[0]),
+            t=float(s[1]),
+            L=float(s[2]),
+            P=float(s[3]),
+            u=float(s[4]),
+            dT=float(s[5]),
+            k=float(s[7]),
+            velocity=float(s[6]),
+        )
+        stress_truth = float(truth["von_mises_stress"])
+        pressure_truth = float(truth["pressure_drop_kPa"])
+
+        rows.append(
+            {
+                "case": case_name,
+                "topology": topology,
+                "topology_group": topology_group,
+                "stress_pred_mpa": float(pred[0]),
+                "stress_truth_mpa": stress_truth,
+                "pressure_pred_kpa": float(pred[1]),
+                "pressure_truth_kpa": pressure_truth,
+                "stress_abs_error_mpa": abs(float(pred[0]) - stress_truth),
+                "pressure_abs_error_kpa": abs(float(pred[1]) - pressure_truth),
+                "compliance": float(result.get("compliance_score", np.nan)),
+                "iterations": int(result.get("iterations", 0)),
+            }
+        )
+
+    raw = pd.DataFrame(rows)
+    summary = (
+        raw.groupby("topology_group")
+        .agg(
+            topology_count=("topology", "nunique"),
+            scenario_count=("case", "count"),
+            stress_mae_mpa=("stress_abs_error_mpa", "mean"),
+            pressure_mae_kpa=("pressure_abs_error_kpa", "mean"),
+            compliance=("compliance", "mean"),
+            iterations=("iterations", "mean"),
+        )
+        .reset_index()
+    )
+    summary["reliability"] = np.clip(1.0 - summary["stress_mae_mpa"] / 200.0, 0.0, 1.0)
+
+    out_dir = Path("results") / "benchmarks"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = out_dir / "topology_pipeline_metrics_raw.csv"
+    summary_path = out_dir / "topology_pipeline_metrics.csv"
+    raw.to_csv(raw_path, index=False)
+    summary.to_csv(summary_path, index=False)
+    print(f"  [OK] Topology benchmark saved to: {summary_path}")
+    return summary_path
 
 
 def run_industrial_suite() -> None:
@@ -44,6 +121,9 @@ def run_industrial_suite() -> None:
             print(f"  [OK] {case} complete. Compliance score: {res['compliance_score']:.4f}")
         except Exception as exc:
             print(f"  [ERROR] case {case}: {exc}")
+
+    if results:
+        _write_topology_pipeline_metrics(orchestrator, results)
 
     print("\n" + "=" * 100)
     print("  [OK] ALL SCENARIOS COMPLETE")

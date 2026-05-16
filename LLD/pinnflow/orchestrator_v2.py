@@ -63,9 +63,9 @@ class UnifiedOrchestrator:
         print("  PINNFLOW V8.1 - DYNAMIC CODAL INTELLIGENCE SUITE")
         print("=" * 80)
 
-        self.pinn = MultiTaskPINN(n_in=10)
-        self.vae = CAVAE(x_dim=10)
-        self.agent = PPOAgent(sdim=10, adim=10)
+        self.pinn = MultiTaskPINN(n_in=16)
+        self.vae = CAVAE(x_dim=16)
+        self.agent = PPOAgent(sdim=16, adim=10)
         self.base_env = PipelineEnv(pinn=self.pinn)
         self.physics = PhysicsSimulator()
         self.train_cvae = train_cvae
@@ -192,7 +192,7 @@ class UnifiedOrchestrator:
                 design = np.zeros(10, dtype=float)
                 design[:8] = blend * row + (1.0 - blend) * seed_state[:8]
                 design[8] = shape_id
-                design[9] = np.clip(shape_param + 0.02 * (idx % 5), 0.3, 1.5)
+                design[9] = np.clip(shape_param + 0.02 * (idx % 5), 0.3, 5.0)
                 rows.append(self.base_env.sanitize_state(design))
 
             rows.append(seed_state.copy())
@@ -296,7 +296,7 @@ class UnifiedOrchestrator:
         print("\n[Phase 2] Topological Flow Analysis (GNN)...")
         topology_name = scenario["inputs"].get("topology", "GasLib-134")
         graph_data = load_gaslib_graph(topology_name)
-        gnn = GasNetworkGNN(node_in_dim=4, edge_in_dim=1)
+        gnn = GasNetworkGNN(node_in_dim=8, edge_in_dim=4)
         gnn_out = gnn(graph_data.x, graph_data.edge_index)
         context.topology_name = topology_name
         context.gnn_summary = self._summarize_gnn(gnn_out)
@@ -367,6 +367,7 @@ class UnifiedOrchestrator:
             "report": report,
             "optimized_state": optimized["final_state"],
             "optimized_metrics": optimized["metrics"],
+            "iterations": optimized["iterations"],
             "compliance_score": optimized["metrics"].get("compliance_score"),
         }
 

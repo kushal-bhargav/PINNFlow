@@ -43,6 +43,24 @@ class CAVAE:
         dtype=float,
     )
     DEFAULT_BOUNDS_8 = DEFAULT_BOUNDS_10[:8].copy()
+    DEFAULT_BOUNDS_16 = np.vstack(
+        [
+            DEFAULT_BOUNDS_10[:8],
+            np.array(
+                [
+                    [0, 3],
+                    [0.3, 5.0],
+                    [0, 3100],
+                    [0, 1.0],
+                    [-1, 1],
+                    [-1, 1],
+                    [0, 0.2],
+                    [0, 1.0e7],
+                ],
+                dtype=float,
+            ),
+        ]
+    )
 
     def __init__(
         self,
@@ -52,15 +70,20 @@ class CAVAE:
         lr: float = 3e-3,
         gamma_phys: float = 2.0,
     ):
-        if x_dim not in (8, 10):
-            raise ValueError("CAVAE currently supports x_dim=8 or x_dim=10.")
+        if x_dim not in (8, 10, 16):
+            raise ValueError("CAVAE currently supports x_dim=8, x_dim=10, or x_dim=16.")
 
         self.x_dim = x_dim
         self.z_dim = z_dim
         self.lr    = lr
         self.gamma = gamma_phys
         self.scaler = StandardScaler()
-        self.bounds = self.DEFAULT_BOUNDS_10[:x_dim].copy() if x_dim == 10 else self.DEFAULT_BOUNDS_8.copy()
+        if x_dim == 16:
+            self.bounds = self.DEFAULT_BOUNDS_16.copy()
+        elif x_dim == 10:
+            self.bounds = self.DEFAULT_BOUNDS_10.copy()
+        else:
+            self.bounds = self.DEFAULT_BOUNDS_8.copy()
         self.condition_dim = 4
 
         # ── Encoder ──────────────────────────────────────────────────────────
@@ -188,12 +211,12 @@ class CAVAE:
 
         for idx, (low, high) in enumerate(self.bounds):
             span = max(high - low, 1e-6)
-            if self.x_dim == 10 and idx == 8:
+            if self.x_dim >= 10 and idx == 8:
                 out[:, idx] = np.clip(np.rint(out[:, idx]), low, high)
             else:
                 out[:, idx] = low + span * (1.0 / (1.0 + np.exp(-out[:, idx])))
 
-        if self.x_dim == 10:
+        if self.x_dim >= 10:
             out[:, 8] = np.clip(np.rint(out[:, 8]), self.bounds[8, 0], self.bounds[8, 1])
         return out
 
@@ -201,7 +224,7 @@ class CAVAE:
         if len(candidates) == 0:
             return np.array([])
 
-        if pinn is not None and self.x_dim == 10:
+        if pinn is not None and self.x_dim >= 10:
             preds = pinn.predict(candidates)
             sigma = preds[:, 0]
             delta_p = preds[:, 1]
@@ -209,7 +232,7 @@ class CAVAE:
             sigma = (candidates[:, 3] * candidates[:, 0]) / (2.0 * np.maximum(candidates[:, 1], 1.0))
             delta_p = candidates[:, 6] * candidates[:, 2] / np.maximum(candidates[:, 0], 1.0)
 
-        if self.x_dim == 10:
+        if self.x_dim >= 10:
             target_pressure = np.clip(self._condition_vector(condition)[0] * 10.0, 1.0, 20.0)
             pressure_gap = np.abs(candidates[:, 3] - target_pressure)
         else:
@@ -351,7 +374,7 @@ class CAVAE:
 
         for idx, (low, high) in enumerate(self.bounds):
             clipped[:, idx] = np.clip(clipped[:, idx], low, high)
-        if self.x_dim == 10:
+        if self.x_dim >= 10:
             clipped[:, 8] = np.clip(np.rint(clipped[:, 8]), self.bounds[8, 0], self.bounds[8, 1])
             # Keep pressure inside the hoop-stress envelope after clipping.
             p_max = 200.0 * 2.0 * clipped[:, 1] / np.maximum(clipped[:, 0], 1.0) * 0.85
@@ -364,7 +387,7 @@ class CAVAE:
     def _sample_valid_designs(self, n: int) -> np.ndarray:
         x = np.zeros((n, self.x_dim), dtype=float)
         for idx, (low, high) in enumerate(self.bounds):
-            if idx == 8 and self.x_dim == 10:
+            if idx == 8 and self.x_dim >= 10:
                 x[:, idx] = np.random.randint(int(low), int(high) + 1, n)
             else:
                 x[:, idx] = np.random.uniform(low, high, n)
