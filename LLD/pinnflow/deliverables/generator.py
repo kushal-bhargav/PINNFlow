@@ -115,16 +115,40 @@ class DeliverableGenerator:
 
     def generate_compliance_matrix(self, design_id: str, metrics: Dict[str, Any]) -> str:
         compliance_score = metrics.get("compliance_score", 1.0)
+        
+        # Extract dynamic values from codal report
+        codal_report = metrics.get("codal_report", [])
+        
+        asme_limit_str = "200.0 MPa"
+        asme_status = "PASS" if metrics.get("constraint_ok", False) else "FAIL"
+        
+        api_limit_str = "60.0 m/s"
+        api_status = "REVIEW"
+        api_val_str = f"{metrics.get('velocity', 0):.1f} m/s"
+        
+        for rep in codal_report:
+            if rep.get("agent") == "ASME B31.3":
+                limit = rep.get("rule_value", {}).get("limit", 200.0)
+                asme_limit_str = f"{limit:.1f} MPa"
+                asme_status = rep.get("status", asme_status)
+            elif rep.get("agent") == "API 14E":
+                limit = rep.get("rule_value", {}).get("limit", 60.0)
+                api_limit_str = f"{limit:.1f} m/s"
+                api_status = rep.get("status", "REVIEW")
+                api_val_str = f"{rep.get('rule_value', {}).get('measured_velocity', 0):.1f} m/s"
+
         matrix = {
-            "Requirement": ["ASME B31.3 Stress", "Internal Pressure", "Compliance Score"],
-            "Limit": ["200 MPa", "Design envelope", ">= 0.90"],
+            "Requirement": ["ASME B31.3 Stress", "API 14E Erosional Velocity", "Internal Pressure", "Compliance Score"],
+            "Limit": [asme_limit_str, api_limit_str, "Design envelope", ">= 0.90"],
             "Value": [
                 f"{metrics.get('sigma', 0):.1f} MPa",
+                api_val_str,
                 f"{metrics.get('delta_P', 0):.2f} kPa",
                 f"{compliance_score:.3f}",
             ],
             "Status": [
-                "PASS" if metrics.get("constraint_ok", False) else "FAIL",
+                asme_status,
+                api_status,
                 "PASS" if metrics.get("delta_P", 0) < 100 else "REVIEW",
                 "PASS" if compliance_score >= 0.90 else "REVIEW",
             ],
