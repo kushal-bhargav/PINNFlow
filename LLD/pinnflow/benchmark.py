@@ -193,3 +193,56 @@ def run_ood_experiment(pinn, asme_adapter, gaslib_loader):
         gaslib_res = {"status": "Loader Error"}
         
     return {"asme": asme_res, "gaslib": gaslib_res}
+
+def run_codal_compliance_benchmarks(agents: list) -> dict:
+    """
+    [Phase 6] Run the ASME Codal Engine against the benchmark suite to verify
+    agent classification accuracy and constraint violation catching.
+    """
+    from pinnflow.benchmarks.asme_cases import get_asme_benchmark_suite
+    
+    suite = get_asme_benchmark_suite()
+    results = {}
+    total = len(suite)
+    passed = 0
+    
+    print("\n[Phase 6] Running Codal Engine Benchmarks...")
+    for case_name, (design, expected_violations) in suite.items():
+        case_violations = []
+        for agent in agents:
+            # We don't have rule_store here directly, but agents have evaluate()
+            res = agent.evaluate(design, context={})
+            if not res.get("pass", True):
+                # match clause
+                case_violations.append(res.get("clause", agent.CLAUSE))
+        
+        # Check if the expected violations were caught
+        expected_set = set(expected_violations)
+        actual_set = set(case_violations)
+        
+        # A test passes if the exact set of clauses were violated
+        # We can do substring matching for robustness
+        case_passed = True
+        for exp in expected_set:
+            if not any(exp in act for act in actual_set):
+                case_passed = False
+                
+        # Also check false positives
+        if len(expected_set) == 0 and len(actual_set) > 0:
+            case_passed = False
+            
+        results[case_name] = {
+            "passed": case_passed,
+            "expected": list(expected_set),
+            "actual": list(actual_set)
+        }
+        if case_passed:
+            passed += 1
+            print(f"  [PASS] {case_name}")
+        else:
+            print(f"  [FAIL] {case_name}")
+            print(f"    Expected: {expected_set}")
+            print(f"    Actual:   {actual_set}")
+            
+    print(f"Codal Benchmark Score: {passed}/{total} ({(passed/total)*100:.1f}%)")
+    return {"score": passed / total, "details": results}

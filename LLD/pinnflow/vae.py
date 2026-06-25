@@ -363,6 +363,22 @@ class CAVAE:
                     f"recon={er/nb:.5f} kl={ek/nb:.5f} phys={ep_ph/nb:.5f} beta={beta:.2f}"
                 )
 
+    def fit_with_gaslib(
+        self,
+        synthetic_X: np.ndarray,
+        gaslib_X: np.ndarray,
+        blend_ratio: float = 0.5,
+        epochs: int = 50,
+    ) -> None:
+        """Blend synthetic and GasLib samples, then train."""
+        from data.gaslib_training_extractor import blend_with_synthetic
+
+        X_blended = blend_with_synthetic(
+            gaslib_X, synthetic_X, blend_ratio=blend_ratio
+        )
+        # We need to compute conditions if not provided, but fit() handles it if conditions=None
+        self.fit(X_blended.to_numpy() if hasattr(X_blended, "to_numpy") else X_blended, epochs=epochs, verbose=True)
+
     # ── Generation helpers ────────────────────────────────────────────────────
     def _clip_designs(self, x: np.ndarray) -> np.ndarray:
         clipped = np.asarray(x, dtype=float).copy()
@@ -441,3 +457,67 @@ class CAVAE:
         else:
             ok = (g[:, 3] * g[:, 0]) / (2 * g[:, 1]) < limit
         return float(ok.mean()), g
+
+    def sample_for_topology(
+        self,
+        topology_name: str,
+        n: int = 20,
+    ) -> np.ndarray:
+        """
+        Sample candidate designs conditioned on topology scale.
+        """
+        topology_key = str(topology_name).lower()
+        if "134" in topology_key:
+            # Medium-pressure, mid-scale network
+            condition = {"max_p": 60.0, "max_t": 20.0, "topology": "GasLib-134"}
+        elif "582" in topology_key:
+            # High-density distribution network
+            condition = {"max_p": 80.0, "max_t": 15.0, "topology": "GasLib-582"}
+        elif "4197" in topology_key:
+            # Large transmission network
+            condition = {"max_p": 120.0, "max_t": 25.0, "topology": "GasLib-4197"}
+        else:
+            condition = {"max_p": 50.0, "max_t": 20.0, "topology": "synthetic"}
+            
+        return self.generate(n=n, condition=condition)
+
+
+def decode_to_component_config(design: np.ndarray) -> dict:
+    """
+    Maps 16-D (or 10-D) design vector -> named component configuration.
+    """
+    x = np.asarray(design).ravel()
+    D_mm = float(x[0])
+    t_mm = float(x[1])
+    L_m  = float(x[2])
+    shape_id = int(round(x[8])) if len(x) >= 10 else 0
+    shape_param = float(x[9]) if len(x) >= 10 else 1.0
+
+    pipe_config = {
+        "NPS_approx_mm": round(D_mm, 1),
+        "thickness_mm": round(t_mm, 2),
+        "length_m": round(L_m, 2),
+    }
+
+    fittings = []
+    reducer_config = None
+    tee_config = None
+
+    if shape_id == 1:
+        fittings.append({"type": f"elbow_LR_R{shape_param:.1f}", "qty": 1})
+    elif shape_id == 2:
+        branch_D = D_mm * shape_param
+        tee_config = {"header_D_mm": round(D_mm, 1), "branch_D_mm": round(branch_D, 1)}
+        fittings.append({"type": "tee", "qty": 1})
+    elif shape_id == 3:
+        D1 = D_mm / shape_param
+        reducer_config = {"D1_in_mm": round(D1, 1), "D2_out_mm": round(D_mm, 1)}
+        fittings.append({"type": "reducer", "qty": 1})
+    
+    return {
+        "pipe": pipe_config,
+        "fittings": fittings,
+        "reducer": reducer_config,
+        "tee": tee_config,
+    }
+

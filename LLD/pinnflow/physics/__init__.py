@@ -10,6 +10,8 @@ from pinnflow.physics.pde_elbow import (
     stress_concentration_factor,
 )
 from pinnflow.physics.pde_straight import darcy_pressure_drop, hoop_stress
+from pinnflow.physics.pde_tee import tee_residuals
+from pinnflow.physics.pde_reducer import reducer_residuals
 
 __all__ = [
     "LossBalancer",
@@ -21,4 +23,6 @@ __all__ = [
     "hoop_stress",
     "ito_friction_factor",
     "stress_concentration_factor",
+    "tee_residuals",
+    "reducer_residuals",
 ]

@@ -25,6 +25,12 @@ from pinnflow import (
 )
 from pinnflow.codal_engine.agents.api14e_agent import API14EAgent
 from pinnflow.codal_engine.agents.asme_b31_agent import ASMEB31Agent
+from pinnflow.codal_engine.agents.thermal_flexibility_agent import ThermalFlexibilityAgent
+from pinnflow.codal_engine.agents.tee_reinforcement_agent import TeeReinforcementAgent
+from pinnflow.codal_engine.agents.reducer_transition_agent import ReducerTransitionAgent
+from pinnflow.codal_engine.agents.pipe_schedule_agent import PipeScheduleAgent
+from pinnflow.codal_engine.agents.elbow_sif_agent import ElbowSIFAgent
+from pinnflow.codal_engine.agents.branch_rules_agent import BranchRulesAgent
 from pinnflow.codal_engine.knowledge.fetcher import CodalFetcher
 from pinnflow.codal_engine.knowledge.parser import CodalParser
 from pinnflow.codal_engine.knowledge.rule_store import CodalRuleStore
@@ -81,6 +87,12 @@ class UnifiedOrchestrator:
         self.agents = [
             ASMEB31Agent(self.rule_store),
             API14EAgent(self.rule_store),
+            ThermalFlexibilityAgent(self.rule_store),
+            TeeReinforcementAgent(self.rule_store),
+            ReducerTransitionAgent(self.rule_store),
+            PipeScheduleAgent(self.rule_store),
+            ElbowSIFAgent(self.rule_store),
+            BranchRulesAgent(self.rule_store),
         ]
 
         self.env = CodalEnvironmentWrapper(self.base_env, self.agents)

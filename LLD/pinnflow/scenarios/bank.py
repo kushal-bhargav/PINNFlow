@@ -49,7 +49,7 @@ class ScenarioBank:
             "temp": [-50.0, 100.0],
             "complexity": "EXTREME",
             "fail_recovery": True,
-            "topology": "GasLib-39",
+            "topology": "GasLib-582",
         }
     }
 

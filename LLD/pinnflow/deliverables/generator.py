@@ -26,14 +26,44 @@ class DeliverableGenerator:
         return case_dir
 
     def generate_bom(self, design_id: str, design_state: Any) -> str:
-        d, _, L = design_state[0], design_state[1], design_state[2]
-        bom = pd.DataFrame(
-            [
-                {"Item": "Main Pipe Segment", "Spec": f"NPS {d/25.4:.1f} Sch Std", "Length_m": round(L, 2), "Qty": 1},
-                {"Item": "Elbow 90 LR", "Spec": f"NPS {d/25.4:.1f} BW", "Qty": 2},
-                {"Item": "Flange WN", "Spec": "Class 150 RF", "Qty": 2},
-            ]
-        )
+        from pinnflow.vae import decode_to_component_config
+        
+        config = decode_to_component_config(design_state)
+        rows = []
+        
+        # Main pipe
+        pipe = config.get("pipe", {})
+        nps_inch = pipe.get("NPS_approx_mm", 0.0) / 25.4
+        t_mm = pipe.get("thickness_mm", 0.0)
+        rows.append({
+            "Item": "Main Pipe Segment",
+            "Spec": f"NPS {nps_inch:.1f} (t={t_mm:.2f}mm)",
+            "Length_m": pipe.get("length_m", 0.0),
+            "Qty": 1
+        })
+        
+        # Fittings (shape-aware)
+        for f in config.get("fittings", []):
+            spec = ""
+            if f["type"] == "tee" and config.get("tee"):
+                t_conf = config["tee"]
+                spec = f"Header {t_conf['header_D_mm']}mm x Branch {t_conf['branch_D_mm']}mm"
+            elif f["type"] == "reducer" and config.get("reducer"):
+                r_conf = config["reducer"]
+                spec = f"In {r_conf['D1_in_mm']}mm x Out {r_conf['D2_out_mm']}mm"
+            else:
+                spec = f"NPS {nps_inch:.1f} BW"
+                
+            rows.append({
+                "Item": f.get("type", "Fitting").replace("_", " ").title(),
+                "Spec": spec,
+                "Length_m": "-",
+                "Qty": f.get("qty", 1)
+            })
+            
+        rows.append({"Item": "Flange WN", "Spec": "Class 150 RF", "Length_m": "-", "Qty": 2})
+
+        bom = pd.DataFrame(rows)
         path = os.path.join(self._case_dir(design_id), f"BOM_{design_id}.csv")
         bom.to_csv(path, index=False)
         return path

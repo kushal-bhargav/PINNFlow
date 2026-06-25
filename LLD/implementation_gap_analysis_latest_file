@@ -1,0 +1,286 @@
+# PINNFlow — Implementation Gap Analysis
+**Project Path:** `c:\Users\VinodSampath\Documents\AI Data Science\PINNFlow-updated-ocr-extract\PINNFlow\LLD`
+
+---
+
+## Executive Summary
+
+The project is **substantially implemented** — the core pipeline exists end-to-end (geometry → PINN → generative model → codal engine → RL → closed-loop → reports). However, several critical gaps remain across Steps 1, 2, 4, 5, and 7–9 that reduce fidelity compared to the stated implementation plan.
+
+---
+
+## Step-by-Step Verification
+
+---
+
+### ✅ STEP 1 — Geometry & Training Dataset Generation
+
+**Status: Partially Implemented (≈ 55%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [geometry/features.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/geometry/features.py) | `GEOMETRY_CLASS_NAMES = ("straight","elbow","t-junction","reducer")`, `extract_curvature_features()`, `geometry_labels()` | 4 geometry types defined with 16-D feature vectors |
+| [simulator.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/simulator.py) | `PhysicsSimulator._fem_cfd()`, `generate()`, `generate_one()` | Synthetic FEM+CFD data generation with diameter, thickness, length, pressure, soil, temp, velocity |
+| [data/raw_gaslib/](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/data/raw_gaslib/) | GasLib-582 (402 KB `.net`), GasLib-4197 (3.1 MB `.net`) | Two GasLib datasets on disk |
+| [gnn.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/gnn.py) | `load_gaslib_graph()` maps GasLib-11 through GasLib-4197 | Topology loading with fallback graph |
+| [scripts/download_gaslib.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/scripts/download_gaslib.py) | `download_gaslib11()` | Utility to fetch GasLib-11 |
+| [simulator/gas_network.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/simulator/gas_network.py) | `GasNetworkSimulator.solve()` | Weymouth-equation-based steady-state network solver |
+| [data/standards/](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/data/standards/) | `ASME_B31_3.pdf`, `API_14E.pdf` | Source standard PDFs present |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **GasLib-134 missing** | HIGH | Plan calls for GasLib-134 specifically; only GasLib-582 and GasLib-4197 `.net` files are in `data/raw_gaslib/`. GasLib-134 is referenced extensively in scenario logic (`ScenarioBank`, `RequirementParser`, `ingestion/parser.py`) but no corresponding dataset file exists. |
+| **GasLib-11, 24, 39, 40 missing** | MEDIUM | `gnn.py` maps these topology keys but the actual `.net` files are absent. |
+| **No GasLib XML parser / loader** | HIGH | The `gnn.py::load_gaslib_graph()` references `data.gaslib_loader.GasLibLoader` (imported inside a try/except), but **no `gaslib_loader.py` exists** — it always falls back to `_fallback_graph()`. Real GasLib XML files are never actually parsed. |
+| **No CAD/FEM/CFD augmentation pipeline** | HIGH | The plan specifies augmented geometry using CAD/FEM/CFD for elbows, tees, and reducers. The current `PhysicsSimulator` generates purely synthetic data using analytical formulas, not true FEM meshes or CFD results. |
+| **ASME machine-readable constraint tables not generated** | MEDIUM | PDFs exist in `data/standards/` but there is no script to extract tables from them into a structured format for the downstream rule engine (the `CodalFetcher`/`CodalParser` do OCR-based extraction at runtime, which is fragile). |
+| **Tee/Reducer geometry not fully exercised in dataset** | MEDIUM | `GEOMETRY_CLASS_NAMES` defines t-junction and reducer, but `simulator.py` does not have distinct FEM/CFD physics for tee reinforcement areas or reducer transition zones — all shapes share the same hoop stress formula. |
+
+---
+
+### ✅ STEP 2 — PINN Surrogate Training
+
+**Status: Well-Implemented (≈ 80%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [pinn.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/pinn.py) | `MultiTaskPINN` — shared encoder + stress head + fluid head | Full multi-task PINN with Fourier features, kNN residual correction, PDE+BC+monotonicity loss |
+| [models/moe_pinn.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/models/moe_pinn.py) | `MoEPINN` — geometry-gated Mixture-of-Experts PINN | Per-geometry expert networks with elbow refinement branch |
+| [physics/pde_straight.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/physics/pde_straight.py) | `hoop_stress()`, `darcy_pressure_drop()` | Analytic PDE residuals for straight pipe |
+| [physics/pde_elbow.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/physics/pde_elbow.py) | `elbow_pressure_drop()`, `elbow_residuals()`, `dean_stress_factor()`, `stress_concentration_factor()` | Ito friction factor + Dean number + SCF-based elbow residuals |
+| [physics/loss_balancer.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/physics/loss_balancer.py) | `LossBalancer` | Adaptive lambda balancing for multi-task loss |
+| [trainers/curriculum.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/trainers/curriculum.py) | `CurriculumTrainer` | Staged geometry curriculum training |
+| [geometry/fourier.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/geometry/fourier.py) | `GeometryAwareFourierLayer` | Geometry-conditioned Fourier feature layer |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **No PDE residuals for Tee Junction** | HIGH | `pde_elbow.py` covers elbows; `pde_straight.py` covers straight pipes. There is **no `pde_tee.py` or `pde_reducer.py`** with tee branch-flow mixing equations or reducer transition physics. The MoEPINN's tee/reducer experts use the same base loss. |
+| **Thermal field prediction not explicit** | MEDIUM | The plan specifies learning "thermal fields." The PINN predicts von Mises stress (including thermal term) but does not produce a standalone temperature distribution output head. |
+| **Deformation field not a separate output** | MEDIUM | "Deformation" is implicitly captured via soil displacement inputs but not predicted as a spatial field. There is no deformation head in `MultiTaskPINN` or `MoEPINN`. |
+| **No GasLib-derived training data pipeline** | HIGH | Training uses `PhysicsSimulator.generate()` for synthetic data. There is no code path that loads the actual GasLib `.net` files, extracts pipe segment parameters, and feeds them as training samples to the PINN. |
+
+---
+
+### ✅ STEP 3 — Generative Layout Model
+
+**Status: Partially Implemented (≈ 65%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [vae.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/vae.py) | `CAVAE` — Constraint-Aware VAE with KL annealing, free bits, physics ELBO penalty | Full VAE generating 8/10/16-D design vectors |
+| [diffusion.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/diffusion.py) | `PipelineDDPM` — DDPM with sinusoidal time embedding and PINN guidance | Tabular diffusion model for design parameter synthesis |
+| [gnn.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/gnn.py) | `GasNetworkGNN`, `load_gaslib_graph()` | Graph-based topology representation |
+| [benchmark.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/benchmark.py) | `run_e2e()` — VAE generates candidate → PINN evaluates → RL refines | Full generative → evaluate → optimize pipeline |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **VAE/Diffusion not trained on GasLib topology** | HIGH | The `CAVAE` and `PipelineDDPM` are trained on synthetic `PhysicsSimulator` data. No code path trains them on actual GasLib network topology distributions (node types, edge connectivity patterns, component counts). |
+| **No spatial layout generation** | HIGH | The generative models produce design *parameter vectors* (diameter, thickness, pressure, etc.) but not 2D/3D piping *layouts* (routes, elevations, support locations). The plan specifies generating candidate piping layouts and component configurations. |
+| **GAN model not implemented** | MEDIUM | The plan lists "GAN / Diffusion" — the DDPM exists; a GAN is not implemented. |
+| **No component configuration output** | MEDIUM | Generated designs encode `shape_id` (0–3) as a single integer but do not produce a bill-of-materials-style component configuration (number of elbows, tee location, reducer schedule, etc.). |
+
+---
+
+### ✅ STEP 4 — Codal Compliance Agent
+
+**Status: Partially Implemented (≈ 50%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [codal_engine/agents/asme_b31_agent.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/agents/asme_b31_agent.py) | `ASMEB31Agent.evaluate()` — hoop stress vs allowable limit | Pressure thickness + stress limit |
+| [codal_engine/agents/api14e_agent.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/agents/api14e_agent.py) | `API14EAgent.evaluate()` — erosional velocity check | Velocity/erosion limit |
+| [compliance.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/compliance.py) | `ASMECompliance.check()` — primary stress + fatigue | Stress + fatigue check |
+| [codal_engine/knowledge/rule_store.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/knowledge/rule_store.py) | `CodalRuleStore` — TF-IDF hybrid rule retrieval | Rule management and semantic query |
+| [codal_engine/knowledge/fetcher.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/knowledge/fetcher.py) | `CodalFetcher` — PDF OCR + rule extraction | ASME/API PDF text extraction |
+| [codal_engine/knowledge/parser.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/knowledge/parser.py) | `CodalParser` — rule structuring from PDF text | Rule parsing from extracted text |
+| [codal_engine/wrapper.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/wrapper.py) | `CodalEnvironmentWrapper.step()` — injects critique penalties | Codal penalty injection into RL reward |
+
+#### ❌ MISSING — Codal Checks Not Implemented
+
+| Required Check (from Plan) | Status | Notes |
+|---------------------------|--------|-------|
+| Pressure thickness verification | ✅ Exists | `ASMEB31Agent` — hoop stress + thickness delta |
+| Velocity and erosion limits | ✅ Exists | `API14EAgent` — erosional velocity |
+| Allowable stress check | ✅ Exists | `ASMECompliance` + `ASMEB31Agent` |
+| **Thermal flexibility checks** | ❌ MISSING | No agent implementing ASME B31.3 Appendix C thermal flexibility (expansion loops, flexibility factor k, stress intensification factor i) |
+| **Tee reinforcement checks** | ❌ MISSING | No agent for ASME B31.3 § 304.3 area replacement / reinforcement pads for branch connections |
+| **Reducer transition validation** | ❌ MISSING | No agent enforcing concentric/eccentric reducer geometry (included angle, D/t ratio limits) |
+| **Pipe schedule / material validation** | ❌ MISSING | No lookup table enforcing valid ASME B36.10M schedule + material grade combinations |
+| **Branch rules** | ❌ MISSING | No agent checking branch-to-header diameter ratio, crotch weld requirements |
+| **Elbow flexibility factor check** | ❌ MISSING | No dedicated check of flexibility factor `k` and SIF `i` for elbows per B31.3 Appendix D |
+| **Manufacturing constraints** | ❌ MISSING | No geometric feasibility constraints (min bend radius, weld clearances) |
+
+---
+
+### ✅ STEP 5 — RL Design Optimization
+
+**Status: Partially Implemented (≈ 65%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [agent.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/agent.py) | `LagrangianPPOAgent` — PPO with GAE-λ, entropy bonus, Lagrangian safety constraint | Full PPO implementation |
+| [environment.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/environment.py) | `PipelineEnv` — 16-D state, PINN-aware reward, ASME stress limit, curriculum | Geometry-aware RL environment |
+| [codal_engine/wrapper.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/wrapper.py) | `CodalEnvironmentWrapper` — injects codal penalties as negative rewards | ASME codal compliance reward |
+| [experiments/rl_agents.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/experiments/rl_agents.py) | Baseline RL agent experiments | Agent comparisons |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **SAC / DQN agents not implemented** | MEDIUM | Plan specifies "PPO / SAC / DQN." Only `LagrangianPPOAgent` (PPO) exists. No SAC or DQN. `experiments/rl_agents.py` may test baselines but those aren't full implementations. |
+| **Cost optimization reward** | MEDIUM | The RL reward (`PipelineEnv`) covers stress, pressure-drop, and ASME compliance but there is no explicit cost-of-materials or construction cost term in the reward signal. |
+| **Reliability optimization reward** | MEDIUM | No fatigue-based reliability term in the RL reward. `fatigue.py` exists as a standalone module but is not wired into `PipelineEnv.step()`. |
+| **Manufacturability reward** | LOW | No weld-count, fitting-count, or NDE cost proxy in the reward function. |
+| **Violation-based design refinement tracking** | PARTIAL | `CodalEnvironmentWrapper` tracks violations as penalty; however, violations are not categorized (type, severity, location) in the action-guidance loop. |
+
+---
+
+### ✅ STEP 6 — Closed-Loop Design Refinement
+
+**Status: Well-Implemented (≈ 85%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [closed_loop/optimizer.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/closed_loop/optimizer.py) | `ClosedLoopOptim.run_refinement()` — iterative RL refinement with convergence detection, codal guidance blending, FEA callback | Full closed-loop optimizer |
+| [orchestrator_v2.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/orchestrator_v2.py) | `UnifiedOrchestrator` — orchestrates all steps end-to-end | Pipeline orchestration |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **ASME rule convergence criterion not explicit** | MEDIUM | Convergence is `state_delta < 0.02 and reward_delta < 0.05 and compliance_score >= 0.90`. There is no hard gate requiring *all* ASME violations to be zero before exiting. |
+| **Multi-scenario layout iteration** | LOW | Closed loop refines a single design vector. No logic iterates multiple topologically distinct layouts before converging on a final solution. |
+
+---
+
+### ⚠️ STEP 7 — Engineering Benchmark Evaluation
+
+**Status: Partially Implemented (≈ 45%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [benchmark.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/benchmark.py) | `run_fem_baseline_fair()`, `run_e2e()` | FEM vs PINN-RL-Gen comparison |
+| [benchmark/fair_comparison.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/benchmark/fair_comparison.py) | Fair comparison runner | Benchmark utility |
+| [experiments/literature_benchmarks.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/experiments/literature_benchmarks.py) | Literature comparison | Published result comparison |
+| [experiments/pinn_ablation.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/experiments/pinn_ablation.py) | Ablation study | Component ablation |
+| [experiments/simulation_study.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/experiments/simulation_study.py) | Simulation study | |
+| [ansys_bridge.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/ansys_bridge.py) | `generate_apdl_script()`, `generate_static_apdl_script()` | ANSYS APDL script generation |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **No actual ASME benchmark test cases** | HIGH | The plan states "compare against ASME benchmark cases." No ASME-standardized test cases (e.g., Code Case 2901, Appendix V examples) are defined as structured validation fixtures. |
+| **FEM validation is synthetic only** | HIGH | `run_fem_baseline_fair()` uses `PhysicsSimulator` (analytical formulas) as the FEM reference, not actual FEM results. The ANSYS bridge generates APDL scripts but there is no code to parse ANSYS output and feed it back as validation. |
+| **No CFD validation loop** | HIGH | CFD pressure-drop predictions are not validated against any CFD reference (ANSYS Fluent/CFX output, OpenFOAM, etc.). |
+| **Stress prediction accuracy metric** | PARTIAL | `run_e2e()` measures avg sigma and pressure drop, but no statistical accuracy metric (RMSE, R², relative error per geometry class) is reported. |
+| **Pressure-drop error metric** | PARTIAL | Exists in benchmark but not broken down by geometry type (straight vs elbow vs tee). |
+
+---
+
+### ✅ STEP 8 — Explainable AI Reporting
+
+**Status: Implemented (≈ 75%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [explainability/trace.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/explainability/trace.py) | `ExplainEngine.generate_explanation()`, `record_decision()`, `export_report_to_file()` | Decision trace + explanation generation |
+| [codal_engine/wrapper.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/codal_engine/wrapper.py) | `codal_report` field in `info` | Violation list with explanations and recommendations |
+| [compliance.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/compliance.py) | `ASMECompliance.explain()` | Human-readable compliance summary |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **No SHAP / attention-based feature attribution** | MEDIUM | Engineering rationale is rule-based text. There is no SHAP value, gradient saliency, or attention map showing *which input features* drove the PINN prediction. `visualization/attention_maps.py` has a stub but is not connected to `ExplainEngine`. |
+| **Corrective actions not prescriptive** | LOW | Recommendations in `ASMEB31Agent` give thickness/pressure deltas but lack narrative explanations (e.g., "Clause 304.1.2 requires minimum wall thickness = formula result"). |
+| **Optimization history not visualized** | LOW | Convergence history is stored as a list but not plotted or exported as a human-readable chart in the XAI report. |
+
+---
+
+### ⚠️ STEP 9 — Automated Report & Visualization
+
+**Status: Partially Implemented (≈ 55%)**
+
+#### What EXISTS
+
+| File | Function / Class | Coverage |
+|------|-----------------|----------|
+| [deliverables/generator.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/deliverables/generator.py) | `generate_bom()`, `generate_iso()`, `generate_compliance_matrix()`, `generate_all()` | BOM CSV, ISO JSON routing, compliance matrix CSV |
+| [visualization.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/visualization.py) | `plot_all()` — 6×3 subplot figure (PINN loss, VAE latent, RL rewards, compliance, ablation) | Comprehensive results figure |
+| [visualization_3d.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/visualization_3d.py) | `render_pipe_3d()` — Plotly 3D cylinder with stress heatmap + deformation overlay | 3D interactive pipe visualization |
+| [visualization/stress_heatmap.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/visualization/stress_heatmap.py) | Stress heatmap plots | |
+| [final_report.py](file:///c:/Users/VinodSampath/Documents/AI%20Data%20Science/PINNFlow-updated-ocr-extract/PINNFlow/LLD/pinnflow/final_report.py) | `generate_scientific_summary()` | Scientific report with geometry performance table |
+
+#### ❌ MISSING / GAPS
+
+| Gap | Impact | Details |
+|-----|--------|---------|
+| **Full stress contour visualization** | MEDIUM | `visualization_3d.py` maps a *uniform* PINN stress to the pipe surface. There is no spatially-varying stress field contour (the PINN predicts a scalar per design vector, not a 3D field). A true contour plot requires spatial field prediction. |
+| **Flow field visualization** | MEDIUM | No velocity/pressure flow field plot. `visualization.py` has pressure-drop bars but no vector field or streamline visualization. |
+| **ISO drawing is JSON, not a real ISO** | LOW | `generate_iso()` outputs a JSON file with node/segment coordinates. A real piping isometric drawing (DXF, PDF, or SVG) is not generated. |
+| **Engineering design documentation** | MEDIUM | No automated PDF/Word report combining compliance matrix, BOM, ISO, and XAI explanation into a single engineer-deliverable document. |
+| **Bill of Materials incomplete** | LOW | `generate_bom()` always outputs the same 3 rows (main pipe, 2 elbows, 2 flanges) regardless of actual shape_id. Tee junctions and reducers are not reflected in the BOM. |
+
+---
+
+## Summary Table
+
+| Step | Description | Completion | Key Gaps |
+|------|-------------|-----------|----------|
+| 1 | Geometry & Dataset Generation | 55% | No GasLib-134; no real XML parser; no CAD/FEM augmentation for tee/reducer |
+| 2 | PINN Surrogate Training | 80% | No tee/reducer PDE; no thermal/deformation heads; not trained on real GasLib data |
+| 3 | Generative Layout Model | 65% | No topology-aware generation; no spatial layout; no GAN |
+| 4 | Codal Compliance Agent | 50% | Missing: thermal flexibility, tee reinforcement, reducer, schedule, branch, SIF/k checks |
+| 5 | RL Design Optimization | 65% | No SAC/DQN; no cost/reliability reward; fatigue not wired into env |
+| 6 | Closed-Loop Refinement | 85% | No hard ASME zero-violation gate |
+| 7 | Engineering Benchmark | 45% | No real ASME test cases; FEM validation is synthetic; no CFD reference |
+| 8 | Explainable AI | 75% | No SHAP/saliency; optimization history not visualized |
+| 9 | Report & Visualization | 55% | No spatial stress field; no flow visualization; no PDF report; BOM incomplete |
+
+---
+
+## Priority Recommendations
+
+### 🔴 Critical (Blocks Research Validity)
+
+1. **Implement `gaslib_loader.py`** — parse the actual `.net` XML files in `data/raw_gaslib/` and feed real topology data to the GNN and generative models. Without this, the GasLib references are cosmetic.
+2. **Add `pde_tee.py` and `pde_reducer.py`** — tee junction flow-mixing continuity equations and reducer transition physics for the PINN PDE loss.
+3. **Add missing codal agents** — `ThermalFlexibilityAgent` (Appendix C), `TeeReinforcementAgent` (§ 304.3), `ReducerAgent`, `ScheduleValidationAgent`.
+4. **Wire real ASME benchmark cases** — structured test fixtures with known analytical answers for validation.
+
+### 🟡 High Priority (Needed for Completeness)
+
+5. **Add SAC agent** (`experiments/rl_agents.py` or `pinnflow/`) and wire to `PipelineEnv`.
+6. **Wire `fatigue.py` into `PipelineEnv`** for the reliability reward term.
+7. **Add cost reward term** (material cost function based on diameter + schedule + length).
+8. **Generate training data from GasLib XML** — extract pipe segments with real D, t, L, P values.
+
+### 🟢 Medium Priority (Improves Quality)
+
+9. **Spatially-resolved stress field** — upgrade PINN to predict stress as a function of (x, y, z) for true contour plots.
+10. **PDF/Word engineering report generation** — consolidate BOM + compliance matrix + XAI + ISO into one deliverable.
+11. **Improve BOM generation** — reflect actual shape_id in component list (tee fittings, reducers).
+12. **SHAP value integration** in `ExplainEngine.generate_explanation()`.

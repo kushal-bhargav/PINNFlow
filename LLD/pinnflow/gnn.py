@@ -37,44 +37,45 @@ class GasNetworkGNN(torch.nn.Module):
         }
 
 
+# Supported topology names — only these three GasLib datasets are on disk.
+_SUPPORTED_TOPOLOGIES = {"GasLib-134", "GasLib-582", "GasLib-4197"}
+
+
 def load_gaslib_graph(topology_name: str, mode: str | None = None):
     """
-    Load a scenario-selected topology and attach deterministic structural features.
+    Load an authentic GasLib topology and attach deterministic node/edge features.
+
+    Supported networks: GasLib-134, GasLib-582, GasLib-4197.
+
+    Raises:
+        ValueError                     — unsupported topology name
+        GasLibFileNotFoundError        — .net file missing from disk
+        GasLibParseError               — malformed XML
     """
-    topology_key = str(topology_name).lower()
+    from data.gaslib_loader import (
+        GasLibLoader,
+        GasLibUnsupportedNetworkError,
+        GasLibFileNotFoundError,
+        GasLibParseError,
+    )
 
-    if mode is not None:
-        selected_mode = mode
-    elif "synthetic" in topology_key or "fsi" in topology_key:
-        selected_mode = "synthetic"
-    else:
-        selected_mode = "authentic"
+    topology_key = str(topology_name).lower().replace("_", "-")
 
-    if topology_key in {"gaslib-11", "gaslib11"}:
-        name = "GasLib-11"
-    elif topology_key in {"gaslib-24", "gaslib24"}:
-        name = "GasLib-24"
-    elif topology_key in {"gaslib-39", "gaslib39"}:
-        name = "GasLib-39"
-    elif topology_key in {"gaslib-40", "gaslib40"}:
-        name = "GasLib-40"
-    elif topology_key in {"gaslib-134", "gaslib134"}:
+    # Normalise the caller-provided name to the canonical form
+    if topology_key in {"gaslib-134", "gaslib134"}:
         name = "GasLib-134"
     elif topology_key in {"gaslib-582", "gaslib582"}:
         name = "GasLib-582"
     elif topology_key in {"gaslib-4197", "gaslib4197"}:
         name = "GasLib-4197"
-    elif topology_key in {"gaslib-2607", "gaslib2607"}:
-        name = "GasLib-2607"
     else:
-        name = topology_name
+        raise ValueError(
+            f"Unsupported topology '{topology_name}'.  "
+            f"Only {sorted(_SUPPORTED_TOPOLOGIES)} are available."
+        )
 
-    try:
-        from data.gaslib_loader import GasLibLoader
-
-        graph = GasLibLoader().load_network(name, mode=selected_mode)
-    except ModuleNotFoundError:
-        graph = _fallback_graph(name)
+    # Always authentic — mode parameter retained for API compatibility only
+    graph = GasLibLoader().load_network(name, mode="authentic")
 
     nodes = list(graph.nodes())
     node_count = max(len(nodes), 1)
@@ -121,18 +122,5 @@ def load_gaslib_graph(topology_name: str, mode: str | None = None):
     return data
 
 
-def _fallback_graph(name: str):
-    """Build a deterministic topology when the optional GasLib loader is absent."""
-    graph = nx.DiGraph()
-    graph.add_node("source", kind="source")
-    graph.add_node("bend", kind="elbow")
-    graph.add_node("junction", kind="junction")
-    graph.add_node("sink_a", kind="sink")
-    graph.add_node("sink_b", kind="sink")
-    graph.add_edge("source", "bend", length=75.0, diameter=323.9, shape_id=0.0, shape_param=1.0)
-    graph.add_edge("bend", "junction", length=45.0, diameter=323.9, shape_id=1.0, shape_param=3.0)
-    graph.add_edge("junction", "sink_a", length=60.0, diameter=273.0, shape_id=2.0, shape_param=1.0)
-    graph.add_edge("junction", "sink_b", length=55.0, diameter=219.1, shape_id=3.0, shape_param=1.4)
-    graph.graph["name"] = name
-    graph.graph["fallback"] = True
-    return graph
+# _fallback_graph removed — all topology loading now uses the real GasLibLoader.
+# Unsupported topology names raise ValueError in load_gaslib_graph().
