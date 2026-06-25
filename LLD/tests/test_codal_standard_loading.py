@@ -148,3 +148,45 @@ def test_rule_store_retrieves_rule_from_extracted_content():
 
     assert results
     assert results[0]["rule_type"] == "corrosion_allowance"
+
+
+def test_fetcher_skips_ocr_if_exact_cache_exists(tmp_path):
+    pdf_path = tmp_path / "standards" / "ASME_B31_3.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF-1.4 dummy")
+
+    fetcher = CodalFetcher(storage_path=str(tmp_path / "standards"))
+    cache_path = fetcher._cache_path(pdf_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("Existing exact cache content")
+
+    text = fetcher.fetch_local_pdf(str(pdf_path))
+    assert text == "Existing exact cache content"
+
+
+def test_fetcher_skips_ocr_if_same_stem_cache_exists(tmp_path):
+    pdf_path = tmp_path / "standards" / "ASME_B31_3.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF-1.4 dummy")
+
+    fetcher = CodalFetcher(storage_path=str(tmp_path / "standards"))
+    cache_path = fetcher.cache_dir / "ASME_B31_3_oldhash.txt"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("Existing stem cache content")
+
+    text = fetcher.fetch_local_pdf(str(pdf_path))
+    assert text == "Existing stem cache content"
+
+
+def test_fetcher_skips_ocr_if_alias_cache_exists(tmp_path):
+    pdf_path = tmp_path / "standards" / "API_14E.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF-1.4 dummy")
+
+    fetcher = CodalFetcher(storage_path=str(tmp_path / "standards"))
+    cache_path = fetcher.cache_dir / "API_4E_oldhash.txt"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("Existing alias cache content")
+
+    text = fetcher.fetch_local_pdf(str(pdf_path))
+    assert text == "Existing alias cache content"

@@ -104,11 +104,29 @@ class CodalFetcher:
 
     def _load_cache(self, target: Path) -> str | None:
         """Return cached text if it exists and is non-empty, else None."""
+        # 1. Exact match
         cache_file = self._cache_path(target)
         if cache_file.exists():
             text = cache_file.read_text(encoding="utf-8", errors="ignore")
             if text.strip():
+                print(f"[Codal] Found exact cache match: {cache_file.name}")
                 return text
+
+        # 2. Same-stem and known API alias cache files
+        search_stems = [target.stem]
+        for alias_name in self.PDF_ALIASES.get(target.name, ()):
+            search_stems.append(Path(alias_name).stem)
+
+        if self.cache_dir.exists():
+            for stem in search_stems:
+                prefix = f"{stem}_"
+                for candidate in self.cache_dir.iterdir():
+                    if candidate.is_file() and candidate.name.startswith(prefix) and candidate.name.endswith(".txt"):
+                        text = candidate.read_text(encoding="utf-8", errors="ignore")
+                        if text.strip():
+                            print(f"[Codal] Using existing cache file for {target.name}: {candidate.name}")
+                            return text
+
         return None
 
     def _save_cache(self, target: Path, text: str) -> None:
