@@ -97,6 +97,7 @@ class LagrangianPPOAgent:
         self.reward_hist: list = []
         self.ent_hist:    list = []
         self.csr_hist:    list = []
+        self.dyna_rollouts = 100
 
     def _init_torch_model(self, sdim: int, adim: int, hidden: int, lr: float) -> None:
         """Initialize the PyTorch Neural Networks for Actor and Critic."""
@@ -324,15 +325,26 @@ class LagrangianPPOAgent:
         num_envs = min(8, max(1, n_ep))
         print(f"[PPOAgent] Vectorized parallel training active. Running {num_envs} environments in parallel on {self.device}.")
 
-        envs = [
-            env.__class__(
+        def _clone_env():
+            if hasattr(env, "env") and hasattr(env, "agents"):
+                base = env.env.__class__(
+                    pinn=env.pinn,
+                    curriculum=env.curriculum,
+                    mode=env.mode,
+                    noise_level=env.noise_level,
+                )
+                wrapped = env.__class__(base, env.agents)
+                if hasattr(env, "codal_penalty_weight"):
+                    wrapped.codal_penalty_weight = env.codal_penalty_weight
+                return wrapped
+            return env.__class__(
                 pinn=env.pinn,
                 curriculum=env.curriculum,
                 mode=env.mode,
-                noise_level=env.noise_level
+                noise_level=env.noise_level,
             )
-            for _ in range(num_envs)
-        ]
+
+        envs = [_clone_env() for _ in range(num_envs)]
         for e in envs:
             if hasattr(env, "codal_penalty_weight"):
                 e.codal_penalty_weight = env.codal_penalty_weight
@@ -408,8 +420,10 @@ class LagrangianPPOAgent:
             Adv_np = np.array(flat_advantages)
             Viol_np = np.array(flat_viols)
 
-            if hasattr(env, 'pinn'):
-                s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(env.pinn, env, n_rollouts=100)
+            if hasattr(env, 'pinn') and self.dyna_rollouts > 0:
+                s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(
+                    env.pinn, env, n_rollouts=self.dyna_rollouts
+                )
                 s_adv = np.array(s_R) - np.mean(s_R)
                 S_np = np.vstack([S_np, s_S])
                 A_np = np.vstack([A_np, s_A])
@@ -460,8 +474,10 @@ class LagrangianPPOAgent:
 
             adv, ret = self._gae(R, V, self.gamma, self.lam)
             
-            if hasattr(env, 'pinn'):
-                s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(env.pinn, env, n_rollouts=100)
+            if hasattr(env, 'pinn') and self.dyna_rollouts > 0:
+                s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(
+                    env.pinn, env, n_rollouts=self.dyna_rollouts
+                )
                 s_adv = np.array(s_R) - np.mean(s_R)
                 S_aug = np.vstack([np.stack(S), s_S])
                 A_aug = np.vstack([np.stack(A), s_A])

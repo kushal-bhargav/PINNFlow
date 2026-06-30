@@ -1,0 +1,62 @@
+[
+  {
+    "step": 0,
+    "action": "Scenario",
+    "result": "{'max_p': 36.36, 'max_t': 11.49, 'topology': 'Synthetic-FSI'}",
+    "reason": "Scenario initialized",
+    "metadata": {}
+  },
+  {
+    "step": 1,
+    "action": "Ingestion",
+    "result": "{'max_pressure_bar': 36.36, 'max_temp_c': 11.49, 'code': 'ASME B31.3', 'topology': 'Synthetic-FSI'}",
+    "reason": "Scenario constraints parsed",
+    "metadata": {}
+  },
+  {
+    "step": 2,
+    "action": "Topology",
+    "result": "Synthetic-FSI",
+    "reason": "Scenario topology loaded",
+    "metadata": {
+      "mean_pressure": -0.017104486003518105,
+      "mean_flow": 0.19347673654556274
+    }
+  },
+  {
+    "step": 3,
+    "action": "CandidateSelection",
+    "result": "[273.0, 9.27, 120.0, 3.636, 15.0, -8.51, 2.409, 0.55, 2.0, 1.2, 327.6, 0.417, 1.0, 0.0, 0.034, 424515.768]",
+    "reason": "Selected highest-ranked candidate after heuristics and topology scoring",
+    "metadata": {
+      "score": 0.5901594965060551,
+      "variants": [
+        {
+          "name": "Max Accessibility",
+          "heuristic": "Maintenance",
+          "score": 0.753
+        },
+        {
+          "name": "Shortest Path",
+          "heuristic": "Cost",
+          "score": 0.719
+        },
+        {
+          "name": "Low Vibration",
+          "heuristic": "Safety",
+          "score": 0.718
+        }
+      ]
+    }
+  },
+  {
+    "step": 4,
+    "action": "ClosedLoop",
+    "result": "[332.612, 9.341, 143.955, 2.239, 14.722, -0.622, 3.161, 0.659, 2.0, 1.083, 327.6, 0.417, 1.0, 0.0, 0.034, 424515.768]",
+    "reason": "max_iters_reached",
+    "metadata": {
+      "iterations": 8,
+      "compliance_score": 0.0022340909192929696
+    }
+  }
+]

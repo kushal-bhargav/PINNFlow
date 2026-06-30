@@ -18,6 +18,63 @@ from pinnflow.orchestrator_v2 import UnifiedOrchestrator
 
 warnings.filterwarnings("ignore")
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _load_env_file(path: Path) -> int:
+    """Load simple KEY=VALUE pairs without requiring python-dotenv."""
+    if not path.exists():
+        return 0
+
+    loaded = 0
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+            loaded += 1
+    return loaded
+
+
+def _load_env_files() -> None:
+    """Load runtime configuration from project-root and LLD .env files."""
+    script_dir = Path(__file__).resolve().parent
+    candidates = [Path.cwd() / ".env", script_dir / ".env"]
+    seen: set[Path] = set()
+    loaded_total = 0
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        loaded = _load_env_file(resolved)
+        loaded_total += loaded
+        if loaded:
+            print(f"[Config] Loaded {loaded} setting(s) from {resolved}")
+    if loaded_total == 0:
+        print("[Config] No .env settings loaded; using shell environment and defaults.")
+
+
+def _flag(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw.strip().strip('"').strip("'"))
+    except ValueError:
+        print(f"[Config] Invalid integer for {name}={raw!r}; using {default}.")
+        return default
+
 
 def _write_topology_pipeline_metrics(orchestrator: UnifiedOrchestrator, results: dict) -> Path:
     """
@@ -94,28 +151,42 @@ def _write_topology_pipeline_metrics(orchestrator: UnifiedOrchestrator, results:
 
 
 def run_industrial_suite() -> None:
+    _load_env_files()
+
     print("=" * 100)
     print("  PINNFLOW v8.1 - TOTAL INDUSTRIAL AUTOMATION [ZERO-TO-END]")
     print("=" * 100)
 
     # ── Training control via environment variables ───────────────────────────
-    def _flag(name: str, default: str = "1") -> bool:
-        return os.getenv(name, default).strip().lower() not in {"0", "false", "no"}
+    test_cycle = _flag("PINNFLOW_TEST_CYCLE", "0")
 
     train_cvae     = _flag("PINNFLOW_TRAIN_CVAE")
-    cvae_epochs    = int(os.getenv("PINNFLOW_CVAE_EPOCHS", "18"))
-    cvae_samples   = int(os.getenv("PINNFLOW_CVAE_SAMPLES_PER_SCENARIO", "20"))
+    cvae_epochs    = _env_int("PINNFLOW_CVAE_EPOCHS", 1 if test_cycle else 18)
+    cvae_samples   = _env_int("PINNFLOW_CVAE_SAMPLES_PER_SCENARIO", 2 if test_cycle else 20)
     cvae_scenarios_raw = os.getenv("PINNFLOW_CVAE_SCENARIOS", "").strip()
     cvae_scenarios = [s.strip() for s in cvae_scenarios_raw.split(",") if s.strip()] or None
 
     train_pinn  = _flag("PINNFLOW_TRAIN_PINN")
-    pinn_epochs = int(os.getenv("PINNFLOW_PINN_EPOCHS", "500"))
-    pinn_n      = int(os.getenv("PINNFLOW_PINN_SYNTHETIC_N", "1200"))
+    pinn_epochs = _env_int("PINNFLOW_PINN_EPOCHS", 1 if test_cycle else 500)
+    pinn_n      = _env_int("PINNFLOW_PINN_SYNTHETIC_N", 60 if test_cycle else 1200)
 
     train_ppo    = _flag("PINNFLOW_TRAIN_PPO")
-    ppo_episodes = int(os.getenv("PINNFLOW_PPO_EPISODES", "400"))
+    ppo_episodes = _env_int("PINNFLOW_PPO_EPISODES", 1 if test_cycle else 400)
+    ppo_steps = _env_int("PINNFLOW_PPO_STEPS", 2 if test_cycle else 25)
+    ppo_dyna_rollouts = _env_int("PINNFLOW_PPO_DYNA_ROLLOUTS", 2 if test_cycle else 100)
 
     train_gnn = _flag("PINNFLOW_TRAIN_GNN")
+    gnn_epochs = _env_int("PINNFLOW_GNN_EPOCHS", 1 if test_cycle else 200)
+
+    cases_raw = os.getenv("PINNFLOW_CASES", "high_pressure_gas,refinery_compliance,deep_sea_fsi").strip()
+    cases = [case.strip() for case in cases_raw.split(",") if case.strip()]
+
+    print(
+        "[Config] Training cycle: "
+        f"test_cycle={test_cycle} | PINN epochs={pinn_epochs}, synthetic_n={pinn_n} | "
+        f"GNN epochs={gnn_epochs} | PPO episodes={ppo_episodes}, steps={ppo_steps}, "
+        f"dyna_rollouts={ppo_dyna_rollouts} | CVAE epochs={cvae_epochs}, samples/scenario={cvae_samples}"
+    )
 
     orchestrator = UnifiedOrchestrator(
         train_cvae=train_cvae,
@@ -127,9 +198,11 @@ def run_industrial_suite() -> None:
         pinn_synthetic_n=pinn_n,
         train_ppo=train_ppo,
         ppo_episodes=ppo_episodes,
+        ppo_steps=ppo_steps,
+        ppo_dyna_rollouts=ppo_dyna_rollouts,
         train_gnn=train_gnn,
+        gnn_epochs=gnn_epochs,
     )
-    cases = ["high_pressure_gas", "refinery_compliance", "deep_sea_fsi"]
 
     results = {}
     for case in cases:

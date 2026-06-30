@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from pinnflow.geometry.features import ensure_geometry_state
 from pinnflow.pinn import MultiTaskPINN
 
 
@@ -92,10 +93,11 @@ class RequirementParser:
         for line in schema["lines"]:
             d = float(line["diameter"])
             t = float(line["thickness"])
-            state = np.array(
+            state_10 = np.array(
                 [[d, t, line.get("design_length_m", 100.0), pressure_mpa, 0.0, 0.0, 3.0, 0.5, 0.0, 1.0]],
                 dtype=float,
             )
+            state = ensure_geometry_state(state_10)
             pinn_pred = self.pinn.predict(state)
             pinn_s = float(pinn_pred[0, 0])
             hoop = float((pressure_mpa * d) / (2.0 * max(t, 1e-6)))

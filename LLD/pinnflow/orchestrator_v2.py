@@ -87,7 +87,10 @@ class UnifiedOrchestrator:
         pinn_synthetic_n: int = 1200,
         train_ppo: bool = True,
         ppo_episodes: int = 400,
+        ppo_steps: int = 25,
+        ppo_dyna_rollouts: int = 100,
         train_gnn: bool = True,
+        gnn_epochs: int = 200,
     ):
         print("\n" + "=" * 80)
         print("  PINNFLOW V8.1 - DYNAMIC CODAL INTELLIGENCE SUITE")
@@ -106,6 +109,9 @@ class UnifiedOrchestrator:
         self.pinn_training_summary: Dict[str, Any] = {}
         self.ppo_training_summary: Dict[str, Any] = {}
         self.gnn_training_summary: Dict[str, Any] = {}
+        self.ppo_steps = max(1, int(ppo_steps))
+        self.ppo_dyna_rollouts = max(0, int(ppo_dyna_rollouts))
+        self.gnn_epochs = max(1, int(gnn_epochs))
 
         print("[Orchestrator] Initializing codal knowledge layer...")
         self.rule_store = CodalRuleStore()
@@ -141,11 +147,11 @@ class UnifiedOrchestrator:
 
         # 2. GNN training on real topology
         if train_gnn:
-            self._train_gnn()
+            self._train_gnn(n_epochs=self.gnn_epochs)
 
         # 3. PPO training on the codal-wrapped environment (uses trained PINN reward)
         if train_ppo:
-            self._train_ppo_agent(n_episodes=ppo_episodes)
+            self._train_ppo_agent(n_episodes=ppo_episodes, steps=self.ppo_steps)
 
         # 4. CVAE training (conditioned on scenario contexts, uses trained PINN for scoring)
         if self.train_cvae:
@@ -248,7 +254,7 @@ class UnifiedOrchestrator:
         self.vae.initialize_scaler(x_init)
 
     # ── GNN training ───────────────────────────────────────────────────────────
-    def _train_gnn(self) -> None:
+    def _train_gnn(self, n_epochs: int = 200) -> None:
         """
         Train GasNetworkGNN in a supervised regression mode on authentic
         GasLib topology: predict per-node pressure and flow from degree/type features.
@@ -291,7 +297,6 @@ class UnifiedOrchestrator:
 
         gnn.train()
         losses = []
-        n_epochs = 200
         for ep in range(1, n_epochs + 1):
             optimizer.zero_grad()
             out = gnn(graph_data.x, graph_data.edge_index)
@@ -319,7 +324,7 @@ class UnifiedOrchestrator:
 
 
     # ── PPO training ───────────────────────────────────────────────────────────
-    def _train_ppo_agent(self, n_episodes: int = 400) -> None:
+    def _train_ppo_agent(self, n_episodes: int = 400, steps: int = 25) -> None:
         """
         Train the Lagrangian PPO agent on the codal-wrapped environment.
 
@@ -327,13 +332,19 @@ class UnifiedOrchestrator:
         predictions, not analytic fallback) for all environments steps.
         """
         print("\n[PPO] " + "=" * 60)
-        print(f"[PPO] Training LagrangianPPO agent for {n_episodes} episodes...")
+        print(
+            f"[PPO] Training LagrangianPPO agent for {n_episodes} episodes "
+            f"({steps} steps/episode, {self.ppo_dyna_rollouts} Dyna rollouts/update)..."
+        )
         start = time.perf_counter()
-        self.agent.train(self.env, n_ep=n_episodes, steps=25, verbose=False)
+        self.agent.dyna_rollouts = self.ppo_dyna_rollouts
+        self.agent.train(self.env, n_ep=n_episodes, steps=steps, verbose=False)
         elapsed = time.perf_counter() - start
         self.ppo_training_summary = {
             "trained": True,
             "episodes": n_episodes,
+            "steps_per_episode": steps,
+            "dyna_rollouts": self.ppo_dyna_rollouts,
             "elapsed_sec": round(elapsed, 2),
             "final_reward": round(float(self.agent.reward_hist[-1]), 4) if self.agent.reward_hist else None,
             "final_csr": round(float(self.agent.csr_hist[-1]), 4) if self.agent.csr_hist else None,
@@ -522,7 +533,16 @@ class UnifiedOrchestrator:
         topology_name = scenario["inputs"].get("topology", "GasLib-134")
         from pinnflow.gnn import _TORCH_AVAILABLE as _gnn_torch_ok
         if _gnn_torch_ok:
-            graph_data = load_gaslib_graph(topology_name)
+            try:
+                graph_data = load_gaslib_graph(topology_name)
+                gnn_topology_name = topology_name
+            except Exception as exc:
+                gnn_topology_name = "GasLib-134"
+                print(
+                    f"[Phase 2] Topology {topology_name!r} unavailable for GNN ({exc}); "
+                    f"using {gnn_topology_name} as analysis fallback."
+                )
+                graph_data = load_gaslib_graph(gnn_topology_name)
             # Prefer the trained GNN instance; fall back to fresh untrained weights.
             gnn = getattr(self, "_trained_gnn", None) or GasNetworkGNN(node_in_dim=8, edge_in_dim=4)
             gnn.eval()

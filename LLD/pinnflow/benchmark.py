@@ -218,7 +218,9 @@ def run_codal_compliance_benchmarks(agents: list) -> dict:
             res = agent.evaluate(design, context={})
             if not res.get("pass", True):
                 # match clause
-                case_violations.append(res.get("clause", agent.CLAUSE))
+                case_violations.append(
+                    res.get("clause", getattr(agent, "CLAUSE", agent.__class__.__name__))
+                )
         
         # Check if the expected violations were caught
         expected_set = set(expected_violations)
