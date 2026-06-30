@@ -1,0 +1,62 @@
+[
+  {
+    "step": 0,
+    "action": "Scenario",
+    "result": "{'max_p': 56.29, 'max_t': 316.99, 'topology': 'GasLib-4197'}",
+    "reason": "Scenario initialized",
+    "metadata": {}
+  },
+  {
+    "step": 1,
+    "action": "Ingestion",
+    "result": "{'max_pressure_bar': 56.29, 'max_temp_c': 316.99, 'code': 'ASME B31.3', 'topology': 'GasLib-4197'}",
+    "reason": "Scenario constraints parsed",
+    "metadata": {}
+  },
+  {
+    "step": 2,
+    "action": "Topology",
+    "result": "GasLib-4197",
+    "reason": "Scenario topology loaded",
+    "metadata": {
+      "mean_pressure": 0.04536645859479904,
+      "mean_flow": -0.06643988192081451
+    }
+  },
+  {
+    "step": 3,
+    "action": "CandidateSelection",
+    "result": "[273.0, 9.27, 80.0, 5.629, 15.0, 80.0, 2.907, 0.45, 1.0, 1.5, 819.0, 0.167, 0.707, 0.707, 0.034, 324018.197]",
+    "reason": "Selected highest-ranked candidate after heuristics and topology scoring",
+    "metadata": {
+      "score": 0.8219949866363514,
+      "variants": [
+        {
+          "name": "Max Accessibility",
+          "heuristic": "Maintenance",
+          "score": 0.759
+        },
+        {
+          "name": "Low Vibration",
+          "heuristic": "Safety",
+          "score": 0.724
+        },
+        {
+          "name": "Shortest Path",
+          "heuristic": "Cost",
+          "score": 0.693
+        }
+      ]
+    }
+  },
+  {
+    "step": 4,
+    "action": "ClosedLoop",
+    "result": "[301.161, 8.951, 73.737, 4.158, 19.174, 75.516, 2.68, 0.447, 1.0, 1.331, 819.0, 0.167, 0.707, 0.707, 0.034, 324018.197]",
+    "reason": "state_stabilized",
+    "metadata": {
+      "iterations": 3,
+      "compliance_score": 1.0
+    }
+  }
+]
