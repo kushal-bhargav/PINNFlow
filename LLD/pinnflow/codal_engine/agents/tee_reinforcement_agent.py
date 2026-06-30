@@ -75,14 +75,21 @@ class TeeReinforcementAgent(CritiqueAgent):
 
         shape_id = float(x[8])
         if round(shape_id) != 2:
-            # Not a tee — not applicable; return a pass with note
+            # Not a tee — not applicable.  Return a clearly marked N/A so that:
+            #   - The codal violation counter does NOT count this as a FAIL
+            #   - The convergence gate can detect shape mismatch if needed
             return {
                 "agent":          self.__class__.__name__,
                 "clause":         self.CLAUSE,
                 "pass":           True,
+                "not_applicable": True,
+                "status":         "N/A",
                 "penalty":        0.0,
                 "violation":      "",
-                "recommendation": "Not applicable (shape_id ≠ 2, not a tee junction).",
+                "recommendation": (
+                    f"Not applicable: design has shape_id={round(shape_id)}, "
+                    "not a tee junction (shape_id=2). No reinforcement check required."
+                ),
             }
 
         D_run_mm  = max(float(x[0]), 1.0)
@@ -103,6 +110,11 @@ class TeeReinforcementAgent(CritiqueAgent):
         fitting    = _required_fitting(d_ratio)
         passes     = area_ok
 
+        verbose = context.get("verbose", False)
+        if verbose:
+            print(f"[TeeReinforcementAgent] Evaluating: D_run={D_run_mm:.1f}mm, t_run={t_run_mm:.2f}mm, P={P_mpa:.2f}MPa | d/D ratio={d_ratio:.2f} (Required fitting: {fitting})")
+            print(f"[TeeReinforcementAgent] Area check: A_required={A_required:.1f} mm² | A_available={A_available:.1f} mm² | status={'PASS' if passes else 'FAIL'}")
+
         penalty       = 0.0
         violation     = ""
         recommendation = ""
@@ -119,6 +131,8 @@ class TeeReinforcementAgent(CritiqueAgent):
                 f"Use a {fitting} at this branch connection.  "
                 f"Add a reinforcing pad to increase available area by {shortfall:.0f} mm²."
             )
+            if verbose:
+                print(f"[TeeReinforcementAgent] Violation: {violation}")
         else:
             recommendation = f"Use a {fitting} at this branch connection."
 

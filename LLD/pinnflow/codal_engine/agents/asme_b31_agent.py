@@ -63,10 +63,18 @@ class ASMEB31Agent(CritiqueAgent):
             },
         ]
 
+        status_str = "PASS" if violation == 0 else "FAIL"
+        if context.get("verbose", False):
+            print(f"[ASMEB31Agent] Evaluating: D={d:.1f}mm, t={t:.2f}mm, P={p:.2f}MPa | stress={sigma:.1f} MPa (Limit: {limit:.1f} MPa) | status={status_str}")
+            if violation > 0:
+                print(f"[ASMEB31Agent] Violation: Stress {sigma:.1f} MPa exceeds limit {limit:.1f} MPa! Penalty={penalty:.4f}")
+                print(f"[ASMEB31Agent] Recommendation: Increase thickness to target={recommended_thickness:.2f} mm")
+
         return {
             "agent": "ASME B31.3",
             "penalty": float(penalty),
-            "status": "PASS" if violation == 0 else "FAIL",
+            "status": status_str,
+            "pass": violation == 0,
             "explanation": f"Stress {sigma:.1f} MPa vs limit {limit:.1f} MPa.",
             "rule": rule,
             "rule_value": {"limit": limit, "measured_sigma": sigma},

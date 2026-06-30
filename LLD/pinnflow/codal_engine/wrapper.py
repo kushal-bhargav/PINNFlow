@@ -21,6 +21,7 @@ class CodalEnvironmentWrapper:
         self.agents = agents
         self.last_compliance_report: List[Dict[str, Any]] = []
         self.codal_penalty_weight = 1.0
+        self.verbose = False
 
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
@@ -33,6 +34,7 @@ class CodalEnvironmentWrapper:
 
     def step(self, action: np.ndarray):
         state, reward, info = self.env.step(action)
+        info["verbose"] = self.verbose
 
         total_penalty = 0.0
         report = []

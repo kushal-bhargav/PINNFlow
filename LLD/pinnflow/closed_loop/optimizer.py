@@ -91,6 +91,11 @@ class ClosedLoopOptim:
         min_iters: int = 3,
     ) -> Dict[str, Any]:
         print(f"[ClosedLoop] Starting refinement loop (max {max_iters} iterations)...")
+        # Enable detailed compliance/env prints during the refinement phase
+        self.env.verbose = True
+        if hasattr(self.env, "env"):
+            self.env.env.verbose = True
+
         state = np.asarray(initial_state, dtype=float).copy()
         self._seed_environment(state)
 
@@ -119,12 +124,33 @@ class ClosedLoopOptim:
                 external_error = None
             last_external_error = external_error
 
+            # --- Hard ASME zero-violation gate ---
+            # Count agents that explicitly FAIL (pass=False or status="FAIL").
+            # Skip N/A agents (not_applicable=True) — they evaluated nothing.
+            codal_report = info.get("codal_report", [])
+            n_violations = sum(
+                1
+                for r in codal_report
+                if not r.get("not_applicable", False)
+                and not r.get("pass", r.get("status", "PASS") == "PASS")
+            )
+            all_codal_pass = n_violations == 0
+
+            print(f"\n[ClosedLoop] Iteration {i}: reward={reward:.4f} (delta={reward_delta:.4f}) | state_delta={state_delta:.4f}")
+            print(f"[ClosedLoop] Codal compliance: score={info.get('compliance_score', 1.0):.4f} | active violations={n_violations}")
+            if n_violations > 0:
+                print(f"[ClosedLoop] Active Violations:")
+                for r in codal_report:
+                    if not r.get("not_applicable", False) and not r.get("pass", r.get("status", "PASS") == "PASS"):
+                        print(f"  - {r.get('agent')}: {r.get('violation')} (Clause: {r.get('clause')})")
+
             if self.fea_callback is not None:
                 converged = (
                     i + 1 >= min_iters
                     and external_error is not None
                     and external_error < 1.0
                     and info["constraint_ok"]
+                    and all_codal_pass  # Hard gate: no ASME violations
                 )
             else:
                 converged = (
@@ -133,6 +159,7 @@ class ClosedLoopOptim:
                     and reward_delta < 0.05
                     and info["constraint_ok"]
                     and info.get("compliance_score", 1.0) >= 0.90
+                    and all_codal_pass  # Hard gate: no ASME violations
                 )
 
             history.append(
@@ -145,20 +172,31 @@ class ClosedLoopOptim:
                     "external_sigma": external_sigma,
                     "external_error": external_error,
                     "compliance_score": info.get("compliance_score"),
+                    "n_codal_violations": n_violations,
+                    "all_codal_pass": all_codal_pass,
                     "converged": converged,
                 }
             )
 
             state = next_state[: len(state)] if len(next_state) != len(state) else next_state
             if info.get("codal_recommendations"):
+                print(f"[ClosedLoop] Applying {len(info['codal_recommendations'])} codal recommendations...")
+                for rec in info["codal_recommendations"]:
+                    print(f"  - Rec: {rec.get('parameter')} -> target={rec.get('target'):.2f} (dir={rec.get('direction')})")
                 state = self._apply_codal_guidance(state, info)
                 self._seed_environment(state)
             previous_reward = reward
 
             if converged:
-                convergence_reason = "external_validation" if self.fea_callback is not None else "state_stabilized"
-                print(f"  [OK] Converged at iteration {i} via {convergence_reason}")
+                convergence_reason = "external_validation" if self.fea_callback is not None else "state_stabilized_zero_violations"
+                print(f"  [OK] Converged at iteration {i} via {convergence_reason} (violations=0)")
                 break
+
+
+        # Restore environment verbose flags to False to keep standard/training logs clean
+        self.env.verbose = False
+        if hasattr(self.env, "env"):
+            self.env.env.verbose = False
 
         info["convergence_reason"] = convergence_reason
         info["external_error"] = last_external_error

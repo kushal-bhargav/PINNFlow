@@ -16,6 +16,15 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from pinnflow.activations import tanh
 
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.distributions import Normal
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pinnflow.environment import PipelineEnv
@@ -46,24 +55,39 @@ class LagrangianPPOAgent:
         self.gamma = gamma; self.lam = lam; self.clip = clip
         self.ent   = ent;   self.n_ep = n_ep; self.lr_base = lr
         
-        # [V5] Lagrangian Multiplier (Saftey Weight)
+        # [V5] Lagrangian Multiplier (Safety Weight)
         self.beta       = beta_init
         self.beta_lr    = 1e-3
         self.cost_limit = 0.02  # Max acceptable ASME violation slack
         
         sc = 0.05
 
-        # ── Actor ─────────────────────────────────────────────────────────────
+        # ── PyTorch initialization (with GPU support) ─────────────────────────
+        self.device = "cpu"
+        self.use_pytorch = False
+        if _TORCH_AVAILABLE:
+            if torch.cuda.is_available():
+                self.device = "cuda"
+                print(f"[PPOAgent] PyTorch CUDA available. Training on GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                self.device = "cpu"
+                print("[PPOAgent] PyTorch available. Training on CPU.")
+            self._init_torch_model(sdim, adim, hidden, lr)
+            self.use_pytorch = True
+        else:
+            print("[PPOAgent] PyTorch not found. Falling back to NumPy CPU training.")
+
+        # ── Actor (NumPy fallback) ────────────────────────────────────────────
         self.Wa1 = np.random.randn(sdim,   hidden) * sc; self.ba1 = np.zeros(hidden)
         self.Wa2 = np.random.randn(hidden, hidden) * sc; self.ba2 = np.zeros(hidden)
         self.Wa3 = np.random.randn(hidden,   adim) * sc; self.ba3 = np.zeros(adim)
         self.log_std = np.full(adim, -1.0)
 
-        # ── Critic ────────────────────────────────────────────────────────────
+        # ── Critic (NumPy fallback) ───────────────────────────────────────────
         self.Wc1 = np.random.randn(sdim,   hidden) * sc; self.bc1 = np.zeros(hidden)
         self.Wc2 = np.random.randn(hidden,      1) * sc; self.bc2 = np.zeros(1)
 
-        # ── Adam states ───────────────────────────────────────────────────────
+        # ── Adam states (NumPy fallback) ──────────────────────────────────────
         self._t = 0
         for nm in ["Wa1", "ba1", "Wa2", "ba2", "Wa3", "ba3", "Wc1", "bc1", "Wc2", "bc2"]:
             setattr(self, "m" + nm, np.zeros_like(getattr(self, nm)))
@@ -73,6 +97,44 @@ class LagrangianPPOAgent:
         self.reward_hist: list = []
         self.ent_hist:    list = []
         self.csr_hist:    list = []
+
+    def _init_torch_model(self, sdim: int, adim: int, hidden: int, lr: float) -> None:
+        """Initialize the PyTorch Neural Networks for Actor and Critic."""
+        class ActorNet(nn.Module):
+            def __init__(self, sdim_in: int, adim_out: int, hidden_dim: int):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(sdim_in, hidden_dim),
+                    nn.Tanh(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.Tanh(),
+                    nn.Linear(hidden_dim, adim_out),
+                    nn.Tanh()
+                )
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.net(x)
+
+        class CriticNet(nn.Module):
+            def __init__(self, sdim_in: int, hidden_dim: int):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(sdim_in, hidden_dim),
+                    nn.Tanh(),
+                    nn.Linear(hidden_dim, 1)
+                )
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.net(x).squeeze(-1)
+
+        self.actor_net = ActorNet(sdim, adim, hidden).to(self.device)
+        self.critic_net = CriticNet(sdim, hidden).to(self.device)
+        self.log_std_tensor = nn.Parameter(torch.full((adim,), -1.0, device=self.device))
+        
+        self.optimizer = optim.Adam([
+            {'params': self.actor_net.parameters()},
+            {'params': self.critic_net.parameters()},
+            {'params': [self.log_std_tensor]}
+        ], lr=lr)
+
 
     # ── Adam step ─────────────────────────────────────────────────────────────
     def _adam(self, nm: str, g: np.ndarray, lr: float,
@@ -104,12 +166,38 @@ class LagrangianPPOAgent:
 
     # ── Action selection ──────────────────────────────────────────────────────
     def select_action(self, state: np.ndarray):
+        if self.use_pytorch:
+            state_norm = self._norm(state)
+            state_t = torch.tensor(state_norm, dtype=torch.float32, device=self.device).unsqueeze(0)
+            with torch.no_grad():
+                mu = self.actor_net(state_t)
+                std = torch.exp(torch.clamp(self.log_std_tensor, -2.0, -0.5))
+                dist = Normal(mu, std)
+                action = dist.sample()
+                action_clipped = torch.clamp(action, -1.0, 1.0)
+                log_prob = dist.log_prob(action).sum(dim=-1)
+            return action_clipped.cpu().numpy()[0], log_prob.cpu().numpy()[0], mu.cpu().numpy()[0]
+
         S  = self._norm(state).reshape(1, -1)
         mu, _, _ = self._actor(S); mu = mu[0]
         std = np.exp(np.clip(self.log_std, -2, -0.5))
         a   = np.clip(mu + 0.5 * std * np.random.randn(len(mu)), -1, 1)
         lp  = -0.5 * np.sum(((a - mu) / (std + 1e-8)) ** 2) - np.sum(np.log(std + 1e-8))
         return a, lp, mu
+
+    def select_action_batch(self, states: np.ndarray):
+        """Batched forward pass for vectorized rollout environments."""
+        s_norm = np.array([self._norm(s) for s in states])
+        state_t = torch.tensor(s_norm, dtype=torch.float32, device=self.device)
+        with torch.no_grad():
+            mu = self.actor_net(state_t)
+            std = torch.exp(torch.clamp(self.log_std_tensor, -2.0, -0.5))
+            dist = Normal(mu, std)
+            action = dist.sample()
+            action_clipped = torch.clamp(action, -1.0, 1.0)
+            log_prob = dist.log_prob(action).sum(dim=-1)
+            values = self.critic_net(state_t)
+        return action_clipped.cpu().numpy(), log_prob.cpu().numpy(), mu.cpu().numpy(), values.cpu().numpy()
 
     # ── GAE-λ ─────────────────────────────────────────────────────────────────
     def _gae(self, R, V, gamma: float, lam: float):
@@ -154,6 +242,63 @@ class LagrangianPPOAgent:
             
         return float(ent), float(self.beta)
 
+    def _update_torch(self, states, actions, old_log_probs, returns, advantages, violations, lr) -> tuple[float, float]:
+        """Perform batched Adam backpropagation update on PyTorch model (runs on CUDA GPU if available)."""
+        s_t = torch.tensor(states, dtype=torch.float32, device=self.device)
+        a_t = torch.tensor(actions, dtype=torch.float32, device=self.device)
+        old_lp_t = torch.tensor(old_log_probs, dtype=torch.float32, device=self.device)
+        ret_t = torch.tensor(returns, dtype=torch.float32, device=self.device)
+        adv_t = torch.tensor(advantages, dtype=torch.float32, device=self.device)
+        viol_t = torch.tensor(violations, dtype=torch.float32, device=self.device)
+
+        # Standardize advantages
+        adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
+
+        # Dual Update for beta (Lagrangian multiplier)
+        avg_viol = float(viol_t.mean().item())
+        self.beta = np.clip(self.beta + self.beta_lr * (avg_viol - self.cost_limit), 0.0, 10.0)
+
+        # Update learning rate for PyTorch optimizer
+        for g in self.optimizer.param_groups:
+            g['lr'] = lr
+
+        for _ in range(self.n_ep):
+            # Actor forward
+            mu = self.actor_net(s_t)
+            std = torch.exp(torch.clamp(self.log_std_tensor, -2.0, -0.5))
+            dist = Normal(mu, std)
+            
+            # Log prob and entropy
+            new_log_probs = dist.log_prob(a_t).sum(dim=-1)
+            entropy = dist.entropy().sum(dim=-1).mean()
+
+            # PPO ratio
+            ratio = torch.exp(new_log_probs - old_lp_t)
+            
+            # Clipped policy objective
+            surr1 = ratio * adv_t
+            surr2 = torch.clamp(ratio, 1.0 - self.clip, 1.0 + self.clip) * adv_t
+            policy_loss = -torch.min(surr1, surr2).mean()
+
+            # Lagrangian safety penalty
+            penalty_loss = self.beta * (ratio * viol_t).mean()
+            
+            # Value function loss
+            values = self.critic_net(s_t)
+            value_loss = 0.5 * (values - ret_t).pow(2).mean()
+
+            # Combined loss (minus entropy to encourage exploration)
+            loss = policy_loss + penalty_loss + value_loss - self.ent * entropy
+
+            # Optimize parameters
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.actor_net.parameters(), 1.0)
+            nn.utils.clip_grad_norm_(self.critic_net.parameters(), 1.0)
+            self.optimizer.step()
+
+        return float(entropy.item()), float(self.beta)
+
     # ── Main training loop ────────────────────────────────────────────────────
     def train(
         self,
@@ -162,8 +307,141 @@ class LagrangianPPOAgent:
         steps: int = 25,
         verbose: bool = True,
     ) -> None:
+        """Train the agent. Automatically dispatches to GPU PyTorch or fallback CPU NumPy."""
+        if self.use_pytorch:
+            self._train_pytorch(env, n_ep, steps, verbose)
+        else:
+            self._train_numpy(env, n_ep, steps, verbose)
+
+    def _train_pytorch(
+        self,
+        env: PipelineEnv,
+        n_ep: int = 400,
+        steps: int = 25,
+        verbose: bool = True,
+    ) -> None:
+        """Parallelized PyTorch vectorized training loop utilizing GPU/CUDA if available."""
+        num_envs = min(8, max(1, n_ep))
+        print(f"[PPOAgent] Vectorized parallel training active. Running {num_envs} environments in parallel on {self.device}.")
+
+        envs = [
+            env.__class__(
+                pinn=env.pinn,
+                curriculum=env.curriculum,
+                mode=env.mode,
+                noise_level=env.noise_level
+            )
+            for _ in range(num_envs)
+        ]
+        for e in envs:
+            if hasattr(env, "codal_penalty_weight"):
+                e.codal_penalty_weight = env.codal_penalty_weight
+
+        self.reward_hist = []
+        self.ent_hist = []
+        self.csr_hist = []
+
+        n_batches = max(1, n_ep // num_envs)
+
+        for b in range(1, n_batches + 1):
+            curr_episode = b * num_envs
+            for idx, e in enumerate(envs):
+                e.episode = curr_episode - num_envs + idx + 1
+
+            # Gather initial states
+            states = np.array([e.reset() for e in envs])
+            
+            all_states = [[] for _ in range(num_envs)]
+            all_actions = [[] for _ in range(num_envs)]
+            all_log_probs = [[] for _ in range(num_envs)]
+            all_rewards = [[] for _ in range(num_envs)]
+            all_values = [[] for _ in range(num_envs)]
+            all_viols = [[] for _ in range(num_envs)]
+            all_infos = [[] for _ in range(num_envs)]
+
+            for step in range(steps):
+                actions, log_probs, mus, values = self.select_action_batch(states)
+                
+                next_states = []
+                for i in range(num_envs):
+                    ns, r, info = envs[i].step(actions[i])
+                    next_states.append(ns)
+                    
+                    all_states[i].append(self._norm(states[i]))
+                    all_actions[i].append(actions[i])
+                    all_log_probs[i].append(log_probs[i])
+                    all_rewards[i].append(r)
+                    all_values[i].append(values[i])
+                    all_viols[i].append(info.get("violation", 0.0))
+                    all_infos[i].append(info)
+
+                states = np.array(next_states)
+
+            # Compute advantages and returns
+            flat_states = []
+            flat_actions = []
+            flat_log_probs = []
+            flat_returns = []
+            flat_advantages = []
+            flat_viols = []
+            
+            batch_rewards = []
+            batch_csrs = []
+
+            for i in range(num_envs):
+                adv, rets = self._gae(all_rewards[i], all_values[i], self.gamma, self.lam)
+                
+                flat_states.extend(all_states[i])
+                flat_actions.extend(all_actions[i])
+                flat_log_probs.extend(all_log_probs[i])
+                flat_returns.extend(rets)
+                flat_advantages.extend(adv)
+                flat_viols.extend(all_viols[i])
+                
+                batch_rewards.append(np.sum(all_rewards[i]) / steps)
+                batch_csrs.append(float(np.mean([info["constraint_ok"] for info in all_infos[i]])))
+
+            S_np = np.array(flat_states)
+            A_np = np.array(flat_actions)
+            LP_np = np.array(flat_log_probs)
+            Ret_np = np.array(flat_returns)
+            Adv_np = np.array(flat_advantages)
+            Viol_np = np.array(flat_viols)
+
+            if hasattr(env, 'pinn'):
+                s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(env.pinn, env, n_rollouts=100)
+                s_adv = np.array(s_R) - np.mean(s_R)
+                S_np = np.vstack([S_np, s_S])
+                A_np = np.vstack([A_np, s_A])
+                Ret_np = np.concatenate([Ret_np, s_R])
+                Adv_np = np.concatenate([Adv_np, s_adv])
+                Viol_np = np.concatenate([Viol_np, s_V])
+                LP_np = np.concatenate([LP_np, np.zeros(len(s_S))])
+
+            # GPU training update batch step
+            ent, beta = self._update_torch(
+                S_np, A_np, LP_np, Ret_np, Adv_np, Viol_np,
+                lr=max(self.lr_base * (0.5 + 0.5 * (1 - curr_episode / n_ep)), 5e-5)
+            )
+
+            avg_reward = np.mean(batch_rewards)
+            avg_csr = np.mean(batch_csrs)
+            self.reward_hist.append(avg_reward)
+            self.ent_hist.append(ent)
+            self.csr_hist.append(avg_csr)
+
+            if curr_episode % 50 == 0 or b == n_batches:
+                print(f"  [Torch-{self.device.upper()}] PPO Episode {curr_episode:4d}/{n_ep} | Avg Reward: {avg_reward:.4f} | CSR: {avg_csr:.4f} | Beta: {self.beta:.4f}")
+
+    def _train_numpy(
+        self,
+        env: PipelineEnv,
+        n_ep: int = 400,
+        steps: int = 25,
+        verbose: bool = True,
+    ) -> None:
+        """Legacy sequential NumPy CPU training loop fallback."""
         for ep in range(1, n_ep + 1):
-            # [P2 FIX] Drive curriculum phases by episode, not by step() calls.
             env.episode = ep
             lr_ep = max(self.lr_base * (0.5 + 0.5 * (1 - ep / n_ep)), 5e-5)
 
@@ -182,17 +460,15 @@ class LagrangianPPOAgent:
 
             adv, ret = self._gae(R, V, self.gamma, self.lam)
             
-            # [P1.4] Dyna-Mix: Add synthetic rollouts if PINN is available
             if hasattr(env, 'pinn'):
                 s_S, s_A, s_R, s_V = self.generate_pinn_rollouts(env.pinn, env, n_rollouts=100)
-                # Compute advantage for synthetic rollouts (simplified)
                 s_adv = np.array(s_R) - np.mean(s_R)
                 S_aug = np.vstack([np.stack(S), s_S])
                 A_aug = np.vstack([np.stack(A), s_A])
                 R_aug = np.concatenate([ret, s_R])
                 Adv_aug = np.concatenate([adv, s_adv])
                 Viol_aug = np.concatenate([VIOL, s_V])
-                LP_aug = np.concatenate([np.array(LP), np.zeros(len(s_S))]) # approx LP for synthetic
+                LP_aug = np.concatenate([np.array(LP), np.zeros(len(s_S))])
                 
                 ent, b_f = self._update(S_aug, A_aug, LP_aug, R_aug, Adv_aug, Viol_aug, lr_ep)
             else:
@@ -201,6 +477,9 @@ class LagrangianPPOAgent:
             self.reward_hist.append(ep_r / steps)
             self.ent_hist.append(float(np.mean(np.exp(np.clip(self.log_std, -2, -0.5)))))
             self.csr_hist.append(float(np.mean([i["constraint_ok"] for i in ep_info])))
+
+            if ep % 50 == 0:
+                print(f"  PPO Episode {ep:4d}/{n_ep} | Avg Reward: {ep_r/steps:.4f} | CSR: {self.csr_hist[-1]:.4f} | Beta: {self.beta:.4f}")
 
     def optimize_pareto(self, env: PipelineEnv, n_steps: int = 500):
         """
@@ -244,7 +523,9 @@ class LagrangianPPOAgent:
             a, _, _ = self.select_action(s)
             
             # Synthetic step
-            ns = np.clip(s + a * r_scale * 0.05, env.BOUNDS[:, 0], env.BOUNDS[:, 1])
+            delta = np.zeros_like(s)
+            delta[:10] = a * r_scale[:10] * 0.05
+            ns = env.sanitize_state(s + delta)
             
             # PINN Inference (with UQ if available)
             if is_ensemble:

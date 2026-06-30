@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from pinnflow.config import ELBOW_CONFIG
+from pinnflow.fatigue import FatigueModel
 from pinnflow.geometry.features import ensure_geometry_state
 from pinnflow.pinn import MultiTaskPINN
 
@@ -73,6 +74,8 @@ class PipelineEnv:
         self.episode = 0
         self.rolling_csr = deque(maxlen=50)
         self.state = np.zeros(16, dtype=float)
+        self._fatigue_model = FatigueModel()  # Basquin S-N model for API 5L X65
+        self.verbose = False
         self.reset()
 
     def sample_geometry_aware_batch(self, n: int) -> np.ndarray:
@@ -192,13 +195,21 @@ class PipelineEnv:
         self.rolling_csr.append(1.0 if constraint_violation <= 0 else 0.0)
 
         weights = self._weights()
-        fatigue = max(0.0, (sigma - 150.0) / 150.0)
+
+        # Fatigue damage via proper Basquin S-N model (FatigueModel)
+        # Use sigma as the cyclic stress range for a conservative single-cycle estimate.
+        fatigue_damage = float(np.clip(
+            self._fatigue_model.damage_index(np.array([sigma]), cycles_per_event=1),
+            0.0, 1.0,
+        ))
+        fatigue_norm = fatigue_damage  # already in [0, 1]
+
         cost = np.pi * (d / 1000.0) * (t / 1000.0) * self.state[2] * 7850.0 / 1e4
 
         reward = -(
             weights[0] * np.clip(sigma / 200.0, 0.0, 1.0)
             + weights[1] * np.clip(delta_p / 100.0, 0.0, 1.0)
-            + weights[2] * np.clip(fatigue, 0.0, 1.0)
+            + weights[2] * np.clip(fatigue_norm, 0.0, 1.0)
             + weights[3] * np.clip(cost / 10.0, 0.0, 1.0)
         )
         if constraint_violation > 0:
@@ -211,10 +222,17 @@ class PipelineEnv:
                 uncertainty_score = float(np.asarray(uq_result["uncertainty_score"]).reshape(-1)[0])
                 reward -= self.uncertainty_penalty_weight * uncertainty_score
 
+        # Detailed print for debugging and flow visualization (guarded by verbose flag)
+        if self.verbose:
+            print(f"[Env._reward] State: D={d:.1f}mm, t={t:.2f}mm, L={self.state[2]:.1f}m, P={self.state[3]:.2f}MPa | Shape: {shape_id} (param={shape_param:.2f})")
+            print(f"[Env._reward] Output: stress={sigma:.2f} MPa, ΔP={delta_p:.2f} kPa, fatigue={fatigue_norm:.4f}, cost={cost:.2f}")
+            print(f"[Env._reward] Penalty weights: {weights} | Raw reward: {reward:.4f} | violated={constraint_violation > 0}")
+
         return reward, {
             "sigma": sigma,
             "delta_P": delta_p,
-            "fatigue": fatigue,
+            "fatigue": fatigue_norm,
+            "fatigue_damage": fatigue_damage,
             "cost": cost,
             "constraint_ok": constraint_violation <= 0,
             "violation": constraint_violation,

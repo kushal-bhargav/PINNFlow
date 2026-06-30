@@ -8,10 +8,14 @@ MODULE 3 — Multi-Task PINN  [N1] + [N5]
 
 [P1] Stress target = log(σ_vm)  → dramatically reduces MAE%
 [N5] kNN residual correction on training set for multi-fidelity accuracy
+[SHAPE-PDE] Shape-aware PDE dispatch: routes collocation points to the correct
+            geometry-specific residual (straight / elbow / tee / reducer)
+            based on shape_id column (col 8).
 
 P2 FIX applied: knn_s and knn_f are guarded independently in predict().
 """
 from __future__ import annotations
+import logging
 from typing import Optional
 
 import numpy as np
@@ -20,6 +24,13 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 
 from pinnflow.layers import AdamLayer
+from pinnflow.physics.pde_straight import hoop_stress, darcy_pressure_drop
+from pinnflow.physics.pde_elbow import elbow_residuals
+from pinnflow.physics.pde_tee import tee_residuals
+from pinnflow.physics.pde_reducer import reducer_residuals
+
+_log = logging.getLogger("pinnflow.pinn")
+
 
 class FourierFeatureLayer:
     """
@@ -123,28 +134,149 @@ class MultiTaskPINN:
             h = l.forward(h)
         return h
 
-    # ── PDE residuals (in scaled space) ──────────────────────────────────────
+    # ── PDE residuals (shape-aware dispatch) ─────────────────────────────────
     def _pde_s(self, xr: np.ndarray, sp: np.ndarray) -> float:
         """
-        Soft monotonicity regulariser: predicted log(σ) should correlate
-        positively with the hoop-stress direction P·d/t.
-        Returns zero when already positively correlated.
+        Shape-aware PDE stress residual.
+
+        Routes collocation points to geometry-specific equations:
+          shape_id == 0  → straight-pipe hoop stress monotonicity
+          shape_id == 1  → elbow SIF-amplified residual (pde_elbow)
+          shape_id == 2  → tee SIF-amplified residual   (pde_tee)
+          shape_id == 3  → reducer amplified residual    (pde_reducer)
+
+        Stress predictions sp are in the scaled log-space used by sy_s.
+        We convert target stresses back to that space for MSE computation.
         """
-        d, t, P = xr[:, 0:1], xr[:, 1:2], xr[:, 3:4]
-        hoop_proxy = P * d / np.maximum(t, 1.0)
-        hp_sc = (hoop_proxy - hoop_proxy.mean()) / (hoop_proxy.std() + 1e-8)
-        sp_sc = (sp - sp.mean()) / (sp.std() + 1e-8)
-        corr  = np.mean(sp_sc * hp_sc)
-        return float(np.maximum(0.0, -corr))
+        if xr.shape[1] < 9:
+            # Fallback: monotonicity heuristic when shape column absent
+            d, t, P = xr[:, 0:1], xr[:, 1:2], xr[:, 3:4]
+            hoop_proxy = P * d / np.maximum(t, 1.0)
+            hp_sc = (hoop_proxy - hoop_proxy.mean()) / (hoop_proxy.std() + 1e-8)
+            sp_sc = (sp - sp.mean()) / (sp.std() + 1e-8)
+            corr = np.mean(sp_sc * hp_sc)
+            return float(np.maximum(0.0, -corr))
+
+        shape_ids = np.clip(np.rint(xr[:, 8]), 0, 3).astype(int)
+        total_res = 0.0
+        count = 0
+
+        # --- straight pipe (shape_id == 0) ---
+        mask0 = shape_ids == 0
+        if np.any(mask0):
+            xr0 = xr[mask0]
+            sigma_tgt = hoop_stress(xr0).ravel()
+            if self.use_log_stress:
+                sigma_tgt = np.log(np.maximum(sigma_tgt, 1.0))
+            sigma_tgt_sc = (sigma_tgt - self.sy_s.mean_[0]) / (self.sy_s.scale_[0] + 1e-8)
+            sp0 = sp[mask0].ravel()
+            total_res += float(np.mean((sp0 - sigma_tgt_sc) ** 2))
+            count += 1
+
+        # --- elbow (shape_id == 1) ---
+        mask1 = shape_ids == 1
+        if np.any(mask1):
+            xr1 = xr[mask1]
+            try:
+                elbow_res = elbow_residuals(xr1, sp[mask1], np.zeros(mask1.sum()))
+                total_res += elbow_res["stress_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        # --- tee (shape_id == 2) ---
+        mask2 = shape_ids == 2
+        if np.any(mask2):
+            xr2 = xr[mask2]
+            try:
+                tee_res = tee_residuals(xr2, sp[mask2], np.zeros(mask2.sum()))
+                total_res += tee_res["stress_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        # --- reducer (shape_id == 3) ---
+        mask3 = shape_ids == 3
+        if np.any(mask3):
+            xr3 = xr[mask3]
+            try:
+                red_res = reducer_residuals(xr3, sp[mask3], np.zeros(mask3.sum()))
+                total_res += red_res["stress_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        return float(total_res / max(count, 1))
 
     def _pde_f(self, xr: np.ndarray, fp: np.ndarray) -> float:
-        """Darcy–Weisbach residual in scaled space."""
-        d, v, L = xr[:, 0:1], xr[:, 6:7], xr[:, 2:3]
-        Re = 1000 * v * (d / 1000) / 0.001
-        fd = np.where(Re > 4000, 0.316 * np.maximum(Re, 1) ** -0.25, 64 / np.maximum(Re, 1))
-        dP = np.maximum(fd * (L / (d / 1000 + 1e-6)) * 1000 * v ** 2 / 2 / 1000, 0.01)
-        dP_sc = (dP - self.sy_f.mean_[0]) / (self.sy_f.scale_[0] + 1e-8)
-        return float(np.mean((fp - dP_sc) ** 2))
+        """
+        Shape-aware PDE fluid residual.
+
+        Routes to geometry-specific pressure-drop targets:
+          shape_id == 0/default → Darcy-Weisbach
+          shape_id == 1          → elbow pressure drop
+          shape_id == 2          → tee branch pressure drop
+          shape_id == 3          → reducer contraction pressure drop
+        """
+        if not hasattr(self.sy_f, "mean_"):
+            return 0.0
+
+        if xr.shape[1] < 9:
+            # fallback: generic Darcy-Weisbach
+            d, v, L = xr[:, 0:1], xr[:, 6:7], xr[:, 2:3]
+            Re = 1000 * v * (d / 1000) / 0.001
+            fd = np.where(Re > 4000, 0.316 * np.maximum(Re, 1) ** -0.25, 64 / np.maximum(Re, 1))
+            dP = np.maximum(fd * (L / (d / 1000 + 1e-6)) * 1000 * v ** 2 / 2 / 1000, 0.01)
+            dP_sc = (dP - self.sy_f.mean_[0]) / (self.sy_f.scale_[0] + 1e-8)
+            return float(np.mean((fp.ravel() - dP_sc.ravel()) ** 2))
+
+        shape_ids = np.clip(np.rint(xr[:, 8]), 0, 3).astype(int)
+        total_res = 0.0
+        count = 0
+
+        # straight (0) + any unrecognised → Darcy-Weisbach
+        mask_straight = (shape_ids == 0)
+        if np.any(mask_straight):
+            xr_s = xr[mask_straight]
+            dP_tgt = darcy_pressure_drop(xr_s).ravel()
+            dP_sc = (dP_tgt - self.sy_f.mean_[0]) / (self.sy_f.scale_[0] + 1e-8)
+            total_res += float(np.mean((fp[mask_straight].ravel() - dP_sc) ** 2))
+            count += 1
+
+        # elbow (1)
+        mask1 = shape_ids == 1
+        if np.any(mask1):
+            xr1 = xr[mask1]
+            try:
+                elbow_res = elbow_residuals(xr1, np.zeros(mask1.sum()), fp[mask1])
+                total_res += elbow_res["flow_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        # tee (2)
+        mask2 = shape_ids == 2
+        if np.any(mask2):
+            xr2 = xr[mask2]
+            try:
+                tee_res = tee_residuals(xr2, np.zeros(mask2.sum()), fp[mask2])
+                total_res += tee_res["flow_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        # reducer (3)
+        mask3 = shape_ids == 3
+        if np.any(mask3):
+            xr3 = xr[mask3]
+            try:
+                red_res = reducer_residuals(xr3, np.zeros(mask3.sum()), fp[mask3])
+                total_res += red_res["flow_residual"]
+                count += 1
+            except Exception:
+                pass
+
+        return float(total_res / max(count, 1))
 
     # ── [N5] kNN residual correction ─────────────────────────────────────────
     def _fit_knn_correction(self, X_raw: np.ndarray, Y_raw_log: np.ndarray) -> None:
@@ -183,6 +315,7 @@ class MultiTaskPINN:
         """
         [P0.2] Uniform sampling across the physical parameter domain.
         """
+        from pinnflow.geometry.features import ensure_geometry_state
         bounds = {
             "diameter": [114.0, 620.0],
             "thickness": [4.0, 22.0],
@@ -192,18 +325,16 @@ class MultiTaskPINN:
             "delta_T": [-40.0, 80.0],
             "velocity": [0.5, 9.0],
             "soil_stiffness": [0.3, 0.8],
-            "shape_id": [0, 2],
+            "shape_id": [0, 3],
             "shape_param": [0.3, 1.5]
         }
-        X = np.zeros((n, self.n_in))
+        X = np.zeros((n, 10))
         for i, (name, b) in enumerate(bounds.items()):
-            if i >= self.n_in:
-                break
             if "id" in name:
                 X[:, i] = np.random.randint(b[0], b[1] + 1, n)
             else:
                 X[:, i] = np.random.uniform(b[0], b[1], n)
-        return X
+        return ensure_geometry_state(X)
 
     def _analytic_predict(self, X_raw: np.ndarray) -> np.ndarray:
         X = np.asarray(X_raw, dtype=float)
@@ -243,7 +374,15 @@ class MultiTaskPINN:
         Returns array of shape (N, 2): [σ_vm_MPa, ΔP_kPa].
         Stress column is exponentiated from log-space.
         """
+    def predict(self, X_raw: np.ndarray) -> np.ndarray:
+        """
+        Predict stress and pressure drop.
+        Returns array of shape (N, 2): [σ_vm_MPa, ΔP_kPa].
+        Stress column is exponentiated from log-space.
+        """
         if not self.is_trained:
+            _log.info("[PINN.predict] PINN is NOT trained. Falling back to ANALYTIC PREDICTIONS.")
+            print(f"[PINN.predict] Info: PINN is not trained. Falling back to analytical formulas for X shape {X_raw.shape}")
             return self._analytic_predict(X_raw)
 
         # [P1 FIX] Explicit log-to-linear mapping
@@ -275,9 +414,16 @@ class MultiTaskPINN:
         Train on sparse labels Y_raw = [σ_vm_MPa, ΔP_kPa] and (optional) 
         dense physics collocation points X_coll.
         """
+        from pinnflow.geometry.features import ensure_geometry_state
+        X_raw = ensure_geometry_state(X_raw)
+
+        print(f"\n[PINN.fit] Starting training: X_raw shape={X_raw.shape}, Y_raw shape={Y_raw.shape}")
+        _log.info(f"PINN training started. Epochs: {epochs}, Batch size: {batch}")
+
         # [P0.2] If X_coll is missing, generate it from domain
         if X_coll is None:
             X_coll = self.sample_collocation_points(n=5000)
+            print(f"[PINN.fit] Generated {len(X_coll)} collocation points automatically.")
             
         # [P0.4] Add Boundary Condition Points
         # BC_1: u_soil = 0 (Fixed support)
@@ -285,6 +431,8 @@ class MultiTaskPINN:
         X_bc1 = self.sample_collocation_points(n=50); X_bc1[:, 4] = 0.0
         X_bc2 = self.sample_collocation_points(n=50); X_bc2[:, 3] = 0.0
         X_bc = np.vstack([X_bc1, X_bc2])
+        print(f"[PINN.fit] Added boundary condition points: X_bc shape={X_bc.shape}")
+
         Xs_bc = self.sx.fit_transform(X_bc) # We'll re-fit sx on full data in a moment
         # Target scaling
         Y_tgt = Y_raw.copy()
@@ -426,9 +574,13 @@ class MultiTaskPINN:
                 )
 
         if self.use_knn_correction:
+            print("[PINN.fit] Fitting kNN residual correction model on training errors...")
             self._fit_knn_correction(X_raw, Y_tgt)
             if verbose: print("  ✓ [N5] kNN residual correction fitted")
         self.is_trained = True
+        print(f"[PINN.fit] Training finished successfully. is_trained = {self.is_trained}")
+        _log.info("PINN training finished successfully.")
+
 
 class FSIPINN(MultiTaskPINN):
     """

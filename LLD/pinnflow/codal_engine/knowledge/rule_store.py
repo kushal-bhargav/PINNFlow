@@ -39,9 +39,12 @@ class CodalRuleStore:
     def query(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         query_str = str(context.get("query", "") or "").lower().strip()
         candidate_indexes = self._candidate_indexes(query_str, context)
+        verbose = context.get("verbose", False)
+
         if not candidate_indexes:
             generic_rules = [rule for rule in self.rules if rule["code"] == "GENERIC_LAYOUT"]
-            print(f"[RuleStore] Query '{query_str}' returned {len(generic_rules)} generic rules.")
+            if verbose:
+                print(f"[RuleStore] Query '{query_str}' returned {len(generic_rules)} generic rules.")
             return generic_rules
 
         ranked = sorted(
@@ -52,16 +55,19 @@ class CodalRuleStore:
         results = [self.rules[idx] for idx in ranked if self._score_rule(idx, query_str, context) > 0.0]
 
         if results:
-            print(f"[RuleStore] Query '{query_str}' returned {len(results)} relevant rules.")
+            if verbose:
+                print(f"[RuleStore] Query '{query_str}' returned {len(results)} relevant rules.")
             return results
 
         generic_rules = [rule for rule in self.rules if rule["code"] == "GENERIC_LAYOUT"]
-        print(f"[RuleStore] Query '{query_str}' returned {len(generic_rules)} generic rules.")
+        if verbose:
+            print(f"[RuleStore] Query '{query_str}' returned {len(generic_rules)} generic rules.")
         return generic_rules
 
     def query_by_rule_type(self, rule_type: str) -> List[Dict[str, Any]]:
         matches = [rule for rule in self.rules if rule["rule_type"] == rule_type]
-        print(f"[RuleStore] query_by_rule_type('{rule_type}') returned {len(matches)} rule(s).")
+        # query_by_rule_type is usually only called during startup initialization,
+        # but we guard it just in case.
         return matches
 
     def best_rule(

@@ -3,38 +3,54 @@ Graph neural network helpers for topology analysis.
 """
 from __future__ import annotations
 
-import torch
-import torch.nn.functional as F
-from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv, global_mean_pool
-import networkx as nx
+try:
+    import torch
+    import torch.nn.functional as F
+    from torch_geometric.data import Data
+    from torch_geometric.nn import GCNConv, global_mean_pool
+    import networkx as nx
+    _TORCH_AVAILABLE = True
+except ImportError as _torch_err:
+    _TORCH_AVAILABLE = False
+    _torch_err_msg = str(_torch_err)
 
 
-class GasNetworkGNN(torch.nn.Module):
-    """
-    GNN for gas network flow prediction.
-    """
 
-    def __init__(self, node_in_dim: int, edge_in_dim: int, hidden_dim: int = 64, graph_embedding_dim: int = 32):
-        super().__init__()
-        self.conv1 = GCNConv(node_in_dim, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        self.graph_head = torch.nn.Linear(hidden_dim, graph_embedding_dim)
-        self.press_head = torch.nn.Linear(hidden_dim, 1)
-        self.flow_head = torch.nn.Linear(hidden_dim, 1)
+if _TORCH_AVAILABLE:
+    class GasNetworkGNN(torch.nn.Module):
+        """
+        GNN for gas network flow prediction.
+        """
 
-    def forward(self, x, edge_index, batch=None):
-        if batch is None:
-            batch = x.new_zeros(x.size(0), dtype=torch.long)
-        h = self.conv1(x, edge_index)
-        h = F.relu(h)
-        h = self.conv2(h, edge_index)
-        h = F.relu(h)
-        return {
-            "node_pressures": self.press_head(h),
-            "flows": self.flow_head(h),
-            "graph_embedding": self.graph_head(global_mean_pool(h, batch)),
-        }
+        def __init__(self, node_in_dim: int, edge_in_dim: int, hidden_dim: int = 64, graph_embedding_dim: int = 32):
+            super().__init__()
+            self.conv1 = GCNConv(node_in_dim, hidden_dim)
+            self.conv2 = GCNConv(hidden_dim, hidden_dim)
+            self.graph_head = torch.nn.Linear(hidden_dim, graph_embedding_dim)
+            self.press_head = torch.nn.Linear(hidden_dim, 1)
+            self.flow_head = torch.nn.Linear(hidden_dim, 1)
+
+        def forward(self, x, edge_index, batch=None):
+            if batch is None:
+                batch = x.new_zeros(x.size(0), dtype=torch.long)
+            h = self.conv1(x, edge_index)
+            h = F.relu(h)
+            h = self.conv2(h, edge_index)
+            h = F.relu(h)
+            return {
+                "node_pressures": self.press_head(h),
+                "flows": self.flow_head(h),
+                "graph_embedding": self.graph_head(global_mean_pool(h, batch)),
+            }
+
+else:
+    class GasNetworkGNN:  # type: ignore[no-redef]
+        """Stub: PyTorch is not installed. Install torch and torch_geometric to use the GNN."""
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                f"GasNetworkGNN requires PyTorch. Install it with: pip install torch torch-geometric. "
+                f"(Original error: {_torch_err_msg})"
+            )
 
 
 # Supported topology names — only these three GasLib datasets are on disk.
@@ -48,10 +64,17 @@ def load_gaslib_graph(topology_name: str, mode: str | None = None):
     Supported networks: GasLib-134, GasLib-582, GasLib-4197.
 
     Raises:
+        RuntimeError                   — when PyTorch is not installed
         ValueError                     — unsupported topology name
         GasLibFileNotFoundError        — .net file missing from disk
         GasLibParseError               — malformed XML
     """
+    if not _TORCH_AVAILABLE:
+        raise RuntimeError(
+            f"load_gaslib_graph requires PyTorch. Install it with: pip install torch torch-geometric. "
+            f"(Original error: {_torch_err_msg})"
+        )
+
     from data.gaslib_loader import (
         GasLibLoader,
         GasLibUnsupportedNetworkError,
@@ -117,10 +140,10 @@ def load_gaslib_graph(topology_name: str, mode: str | None = None):
     data.num_nodes = node_count
     data.x = x
     data.topology_name = topology_name
-    data.topology_mode = selected_mode
     data.node_names = nodes
     return data
 
 
 # _fallback_graph removed — all topology loading now uses the real GasLibLoader.
 # Unsupported topology names raise ValueError in load_gaslib_graph().
+

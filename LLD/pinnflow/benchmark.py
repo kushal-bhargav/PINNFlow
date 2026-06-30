@@ -76,14 +76,15 @@ def run_e2e(
     t0 = time.time()
     records = []
 
-    for _ in range(n):
+    print(f"[Benchmark.run_e2e] Evaluating {n} designs through the VAE -> PPO -> PhysicsSimulator pipeline...")
+    for design_idx in range(n):
         # 1. VAE generates candidate layout
         layout = vae.generate(1)[0]
         layout = np.clip(layout, env.BOUNDS[:, 0], env.BOUNDS[:, 1])
         env.state = layout
 
         # 2. PPO refines the layout
-        for _ in range(25):
+        for step_idx in range(25):
             a, _, _ = agent.select_action(env.state)
             env.step(a)
 
@@ -98,6 +99,8 @@ def run_e2e(
             "dP":    row["pressure_drop_kPa"],
             "ok":    row["von_mises_stress"] < 200,
         })
+        if (design_idx + 1) % 10 == 0 or (design_idx + 1) == n:
+            print(f"  - Evaluated {design_idx + 1}/{n} designs | Last: sigma={row['von_mises_stress']:.2f} MPa, dP={row['pressure_drop_kPa']:.2f} kPa")
 
     elapsed = time.time() - t0
     sigs = [r["sigma"] for r in records]
@@ -109,6 +112,7 @@ def run_e2e(
         "elapsed_s": round(elapsed, 5),
         "n_designs": n,
     }
+    print(f"[Benchmark.run_e2e] Finished. Avg stress={summary['avg_sigma']:.2f} MPa, Avg dP={summary['avg_dP']:.2f} kPa, CSR={summary['csr']*100:.2f}%")
     return summary, records
 
 

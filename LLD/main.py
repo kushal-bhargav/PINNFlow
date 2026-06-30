@@ -98,17 +98,36 @@ def run_industrial_suite() -> None:
     print("  PINNFLOW v8.1 - TOTAL INDUSTRIAL AUTOMATION [ZERO-TO-END]")
     print("=" * 100)
 
-    train_cvae = os.getenv("PINNFLOW_TRAIN_CVAE", "1").strip().lower() not in {"0", "false", "no"}
-    cvae_epochs = int(os.getenv("PINNFLOW_CVAE_EPOCHS", "18"))
-    cvae_samples = int(os.getenv("PINNFLOW_CVAE_SAMPLES_PER_SCENARIO", "20"))
+    # ── Training control via environment variables ───────────────────────────
+    def _flag(name: str, default: str = "1") -> bool:
+        return os.getenv(name, default).strip().lower() not in {"0", "false", "no"}
+
+    train_cvae     = _flag("PINNFLOW_TRAIN_CVAE")
+    cvae_epochs    = int(os.getenv("PINNFLOW_CVAE_EPOCHS", "18"))
+    cvae_samples   = int(os.getenv("PINNFLOW_CVAE_SAMPLES_PER_SCENARIO", "20"))
     cvae_scenarios_raw = os.getenv("PINNFLOW_CVAE_SCENARIOS", "").strip()
-    cvae_scenarios = [item.strip() for item in cvae_scenarios_raw.split(",") if item.strip()] or None
+    cvae_scenarios = [s.strip() for s in cvae_scenarios_raw.split(",") if s.strip()] or None
+
+    train_pinn  = _flag("PINNFLOW_TRAIN_PINN")
+    pinn_epochs = int(os.getenv("PINNFLOW_PINN_EPOCHS", "500"))
+    pinn_n      = int(os.getenv("PINNFLOW_PINN_SYNTHETIC_N", "1200"))
+
+    train_ppo    = _flag("PINNFLOW_TRAIN_PPO")
+    ppo_episodes = int(os.getenv("PINNFLOW_PPO_EPISODES", "400"))
+
+    train_gnn = _flag("PINNFLOW_TRAIN_GNN")
 
     orchestrator = UnifiedOrchestrator(
         train_cvae=train_cvae,
         cvae_epochs=cvae_epochs,
         cvae_samples_per_scenario=cvae_samples,
         cvae_scenario_names=cvae_scenarios,
+        train_pinn=train_pinn,
+        pinn_epochs=pinn_epochs,
+        pinn_synthetic_n=pinn_n,
+        train_ppo=train_ppo,
+        ppo_episodes=ppo_episodes,
+        train_gnn=train_gnn,
     )
     cases = ["high_pressure_gas", "refinery_compliance", "deep_sea_fsi"]
 
@@ -119,11 +138,24 @@ def run_industrial_suite() -> None:
             res = orchestrator.run_e2e(case_name=case)
             results[case] = res
             print(f"  [OK] {case} complete. Compliance score: {res['compliance_score']:.4f}")
+            # Print training provenance for verification
+            ts = res.get("training_summary", {})
+            print(f"  [TRAINING] PINN trained={ts.get('pinn_is_trained')} | "
+                  f"PINN_loss={ts.get('pinn', {}).get('final_total_loss')} | "
+                  f"PPO_CSR={ts.get('ppo', {}).get('final_csr')} | "
+                  f"GNN_loss={ts.get('gnn', {}).get('final_loss')}")
         except Exception as exc:
             print(f"  [ERROR] case {case}: {exc}")
 
     if results:
         _write_topology_pipeline_metrics(orchestrator, results)
+
+    # ── Codal Compliance Benchmark Suite ────────────────────────────────
+    print("\n" + "=" * 80)
+    print("  [BENCHMARK] Running ASME Codal Compliance Benchmark Suite...")
+    from pinnflow.benchmark import run_codal_compliance_benchmarks
+    codal_bench_results = run_codal_compliance_benchmarks(orchestrator.agents)
+    print(f"  [BENCHMARK] Codal score: {codal_bench_results['score'] * 100:.1f}%")
 
     print("\n" + "=" * 100)
     print("  [OK] ALL SCENARIOS COMPLETE")
@@ -131,6 +163,7 @@ def run_industrial_suite() -> None:
     print(f"  [OK] Decision traces recorded for {len(results)} cases.")
     print("=" * 100)
     print("\n[V8.1] Suggestion: Open 'pinnflow/ui/dashboard.html' to view the interactive audit results.")
+
 
 
 if __name__ == "__main__":

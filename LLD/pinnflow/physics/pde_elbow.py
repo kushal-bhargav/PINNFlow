@@ -59,9 +59,17 @@ def elbow_residuals(X_raw: np.ndarray, sigma_pred: np.ndarray, dp_pred: np.ndarr
     straight_sigma = hoop
     dean_limit = straight_sigma * dean_stress_factor(X)
     scf = stress_concentration_factor(X)
+    
+    ito_res = np.mean((dP - elbow_pressure_drop(X)) ** 2)
+    dean_res = np.mean(np.maximum(0.0, sigma - dean_limit) ** 2)
+    scf_res = np.mean((sigma / hoop - scf) ** 2)
+    darcy_res = np.mean((dP - darcy_pressure_drop(X)) ** 2)
+    
     return {
-        "ito": np.mean((dP - elbow_pressure_drop(X)) ** 2),
-        "dean": np.mean(np.maximum(0.0, sigma - dean_limit) ** 2),
-        "scf": np.mean((sigma / hoop - scf) ** 2),
-        "darcy": np.mean((dP - darcy_pressure_drop(X)) ** 2),
+        "ito": ito_res,
+        "dean": dean_res,
+        "scf": scf_res,
+        "darcy": darcy_res,
+        "stress_residual": dean_res + scf_res,
+        "flow_residual": ito_res + darcy_res,
     }
