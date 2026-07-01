@@ -160,33 +160,64 @@ def _fmt(value, digits: int = 4) -> str:
     return f"{value:.{digits}f}" if np.isfinite(value) else "N/A"
 
 
-def _log_result_tables(orchestrator, results: dict, topology_summary: pd.DataFrame) -> None:
-    names = {"high_pressure_gas": "High Pressure Gas", "refinery_compliance": "Refinery Compliance", "deep_sea_fsi": "Deep Sea FSI"}
-    scenarios = [[names.get(case, case.replace("_", " ").title()), result["scenario"]["inputs"].get("topology", "N/A"), _fmt(result.get("compliance_score")), result.get("iterations", "N/A")] for case, result in results.items()]
-    scenarios.append(["Average", "", _fmt(np.mean([r["compliance_score"] for r in results.values()])), _fmt(np.mean([r["iterations"] for r in results.values()]), 2)])
+def _benchmark_geometry(orchestrator, n: int = 20) -> list[dict]:
+    from pinnflow.geometry.features import ensure_geometry_state
 
-    measured = []
-    for result in results.values():
-        state = np.asarray(result["optimized_state"], dtype=float).reshape(1, -1)
+    rows = []
+    for shape, name in ((0, "Straight"), (1, "Elbow/Bend"), (2, "T-junction"), (3, "Reducer")):
+        states = orchestrator.base_env.sample_geometry_aware_batch(n)
+        states[:, 8] = shape
+        states = ensure_geometry_state(states[:, :10])
         start = time.perf_counter()
-        prediction = orchestrator.pinn.predict(state)[0]
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        s = state[0]
-        truth = orchestrator.physics.generate_one(d=s[0], t=s[1], L=s[2], P=s[3], u=s[4], dT=s[5], k=s[7], velocity=s[6], shape_id=s[8], shape_param=s[9])
-        measured.append({"shape": int(np.clip(np.rint(s[8]), 0, 3)), "time": elapsed_ms, "stress": abs(float(prediction[0]) - truth["von_mises_stress"]), "pressure": abs(float(prediction[1]) - truth["pressure_drop_kPa"])})
+        predictions = orchestrator.pinn.predict(states)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0 / n
+        truths = [orchestrator.physics.generate_one(d=s[0], t=s[1], L=s[2], P=s[3], u=s[4], dT=s[5], k=s[7], velocity=s[6], shape_id=s[8], shape_param=s[9]) for s in states]
+        rows.append({"name": name, "time": elapsed_ms, "stress": float(np.mean([abs(float(p[0]) - t["von_mises_stress"]) for p, t in zip(predictions, truths)])), "pressure": float(np.mean([abs(float(p[1]) - t["pressure_drop_kPa"]) for p, t in zip(predictions, truths)]))})
+    return rows
 
-    geometry = []
-    for shape, name in ((0, "Straight"), (1, "Elbow/Bend"), (2, "T-junction")):
-        rows = [row for row in measured if row["shape"] == shape]
-        geometry.append([name, _fmt(np.mean([r["time"] for r in rows])) if rows else "N/A", "N/A", _fmt(np.mean([r["stress"] for r in rows])) if rows else "N/A", _fmt(np.mean([r["pressure"] for r in rows])) if rows else "N/A"])
-    aggregate = [_fmt(np.mean([r["time"] for r in measured])), "N/A", _fmt(np.mean([r["stress"] for r in measured])), _fmt(np.mean([r["pressure"] for r in measured]))]
-    geometry.extend([["Closed Loop", *aggregate], ["Average", *aggregate]])
-    topology = [[row.topology_group, _fmt(row.stress_mae_mpa), _fmt(row.pressure_mae_kpa), _fmt(row.reliability)] for row in topology_summary.itertuples(index=False)]
+
+def _benchmark_topologies(orchestrator, n: int = 20) -> list[list[str]]:
+    from data.gaslib_training_extractor import extract_training_samples_from_gaslib
+    from pinnflow.geometry.features import ensure_geometry_state
+
+    authentic = extract_training_samples_from_gaslib("GasLib-582").head(n)
+    synthetic = orchestrator.physics.generate(n).head(n)
+    output = []
+    for name, frame in (("Authentic", authentic), ("Synthetic", synthetic)):
+        features = frame[["diameter", "thickness", "length", "pressure", "soil_disp", "delta_T", "velocity", "soil_stiffness"]].to_numpy(dtype=float)
+        states = ensure_geometry_state(
+            np.column_stack([features, np.zeros(len(frame)), np.ones(len(frame))])
+        )
+        predictions = orchestrator.pinn.predict(states)
+        truth = frame[["von_mises_stress", "pressure_drop_kPa"]].to_numpy(dtype=float)
+        mae = np.mean(np.abs(predictions - truth), axis=0)
+        output.append([name, _fmt(mae[0]), _fmt(mae[1]), _fmt(np.clip(1.0 - mae[0] / 200.0, 0.0, 1.0))])
+    return output
+
+
+def _log_result_tables(orchestrator, results: dict, failures: dict) -> None:
+    names = {"high_pressure_gas": "High Pressure Gas", "refinery_compliance": "Refinery Compliance", "deep_sea_fsi": "Deep Sea FSI"}
+    requested = ("high_pressure_gas", "refinery_compliance", "deep_sea_fsi")
+    scenarios = []
+    for case in requested:
+        if case in results:
+            result = results[case]
+            scenarios.append([names[case], result["scenario"]["inputs"].get("topology", "N/A"), _fmt(result.get("compliance_score")), result.get("iterations", "N/A"), "Complete"])
+        else:
+            scenarios.append([names[case], "", "-", "-", f"Failed: {failures.get(case, 'not executed')}"])
+    completed = list(results.values())
+    scenarios.append(["Average", "", _fmt(np.mean([r["compliance_score"] for r in completed])) if completed else "-", _fmt(np.mean([r["iterations"] for r in completed]), 2) if completed else "-", f"{len(completed)}/3 complete"])
+
+    measured = _benchmark_geometry(orchestrator, _env_int("PINNFLOW_BENCHMARK_SAMPLES", 20))
+    geometry = [[row["name"], _fmt(row["time"]), _fmt(row["stress"]), _fmt(row["pressure"])] for row in measured]
+    aggregate = [float(np.mean([row[key] for row in measured])) for key in ("time", "stress", "pressure")]
+    geometry.extend([["Closed Loop", *[_fmt(value) for value in aggregate]], ["Average", *[_fmt(value) for value in aggregate]]])
+    topology = _benchmark_topologies(orchestrator, _env_int("PINNFLOW_BENCHMARK_SAMPLES", 20))
 
     print("\nTable II. End-to-End Scenario Outcomes from the Verified Artifact Set")
-    print(tabulate(scenarios, headers=["Scenario", "Topology", "Compliance", "Iterations"], tablefmt="grid"))
-    print("\nTable III. Geometry-Level Surrogate Efficiency versus Nominal ANSYS Runtime")
-    print(tabulate(geometry, headers=["Geometry", "Time (ms)", "Speedup", "Stress MAE", "Press. MAE"], tablefmt="grid"))
+    print(tabulate(scenarios, headers=["Scenario", "Topology", "Compliance", "Iterations", "Status"], tablefmt="grid"))
+    print("\nTable III. Geometry-Level Surrogate Accuracy and Measured Pipeline Runtime")
+    print(tabulate(geometry, headers=["Geometry", "Time (ms/sample)", "Stress MAE", "Press. MAE"], tablefmt="grid"))
     print("\nTable IV. Authentic versus Synthetic Topology Benchmark")
     print(tabulate(topology, headers=["Topology", "Stress MAE", "Pressure MAE", "Reliability"], tablefmt="grid"))
 
@@ -246,6 +277,7 @@ def run_industrial_suite() -> None:
     )
 
     results = {}
+    failures = {}
     for case in cases:
         try:
             print(f"\n[SUITE] Executing workflow for scenario: {case.upper()}...")
@@ -259,6 +291,7 @@ def run_industrial_suite() -> None:
                   f"PPO_CSR={ts.get('ppo', {}).get('final_csr')} | "
                   f"GNN_loss={ts.get('gnn', {}).get('final_loss')}")
         except Exception as exc:
+            failures[case] = str(exc)
             print(f"  [ERROR] case {case}: {exc}")
 
     topology_summary = None
@@ -277,8 +310,7 @@ def run_industrial_suite() -> None:
     print("  [OK] Scientific deliverables generated in: results/")
     print(f"  [OK] Decision traces recorded for {len(results)} cases.")
     print("=" * 100)
-    if results and topology_summary is not None:
-        _log_result_tables(orchestrator, results, topology_summary)
+    _log_result_tables(orchestrator, results, failures)
     print("\n[V8.1] Suggestion: Open 'pinnflow/ui/dashboard.html' to view the interactive audit results.")
 
 
