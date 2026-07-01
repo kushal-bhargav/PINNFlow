@@ -37,7 +37,7 @@ class FourierFeatureLayer:
     [P7.1] Random Fourier Features as input layer.
     Maps 10-dim parameters to 128-dim high-frequency features.
     """
-    def __init__(self, n_in=10, n_features=64, sigma=1.0):
+    def __init__(self, n_in=10, n_features=128, sigma=1.0):
         self.B = np.random.randn(n_in, n_features) * sigma
         self.output_dim = n_features * 2
     
@@ -64,7 +64,7 @@ class MultiTaskPINN:
     def __init__(
         self,
         n_in: int = 10,
-        hidden: tuple = (128, 256, 256, 128),
+        hidden: tuple = (256, 512, 512, 256),
         lr: float = 5e-3,
         lam_s: float = 0.005,
         lam_f: float = 0.02,
@@ -87,7 +87,7 @@ class MultiTaskPINN:
         self.use_monotonicity = use_monotonicity
         
         # [P7.1] Fourier Encoding
-        self.fourier = FourierFeatureLayer(n_in=n_in, n_features=64, sigma=1.0)
+        self.fourier = FourierFeatureLayer(n_in=n_in, n_features=128, sigma=1.0)
 
         # Shared encoder (increased input size to 128)
         e = [self.fourier.output_dim, hidden[0], hidden[1]]
@@ -387,6 +387,13 @@ class MultiTaskPINN:
 
         # [P1 FIX] Explicit log-to-linear mapping
         raw = self._raw_predict_log(X_raw)
+
+        if self.use_knn_correction and (self.knn_s is not None or self.knn_f is not None):
+            Xn = self.sx.transform(X_raw)
+            if self.knn_s is not None:
+                raw[:, 0] += self.knn_s.predict(Xn)
+            if self.knn_f is not None:
+                raw[:, 1] += self.knn_f.predict(Xn)
         
         if self.use_log_stress:
             # clip to avoid extreme values before exp
